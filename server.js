@@ -216,37 +216,54 @@ setInterval(() => {
 }, 5000);
 
 // =========================================================================================
-// OUTPUT
+// OUTPUT CHIA THÀNH 2 API RIÊNG BIỆT
 // =========================================================================================
-app.get('/', (req, res) => {
+const buildResponse = (type) => {
+    const s = APP_STATE[type];
+    const lastSession = s.history.length > 0 ? s.history[s.history.length - 1].session : 0;
+    const nextId = lastSession + 1;
+
+    const p = predictor.predict(s.history);
+
+    return {
+        phien_tiep: nextId,
+        du_doan: p.ketqua,
+        tin_cay: p.confidence,
+        logic: p.logic,
+        lich_su_gan_nhat: s.history.slice(-12).map(h => h.result).join(' - '),
+        thong_ke: {
+            thang: s.stats.win,
+            thua: s.stats.loss,
+            winrate: s.stats.total > 0 ? ((s.stats.win / s.stats.total) * 100).toFixed(1) + "%" : "0%"
+        }
+    };
+};
+
+// API lấy dữ liệu Tài Xỉu Nổ Hũ
+app.get('/nohu', (req, res) => {
     try {
-        const build = (type) => {
-            const s = APP_STATE[type];
-            const lastSession = s.history.length > 0 ? s.history[s.history.length - 1].session : 0;
-            const nextId = lastSession + 1;
-
-            const p = predictor.predict(s.history);
-
-            return {
-                phien_tiep: nextId,
-                du_doan: p.ketqua,
-                tin_cay: p.confidence,
-                logic: p.logic,
-                lich_su_gan_nhat: s.history.slice(-12).map(h => h.result).join(' - '),
-                thong_ke: {
-                    thang: s.stats.win,
-                    thua: s.stats.loss,
-                    winrate: s.stats.total > 0 ? ((s.stats.win / s.stats.total) * 100).toFixed(1) + "%" : "0%"
-                }
-            };
-        };
-
         res.json({
             system: "TUANX3000-ULTIMATE",
             admin: "TUANX3000",
+            game: "TÀI XỈU NỔ HŨ",
             update_at: new Date().toLocaleString('vi-VN'),
-            nohu: build('nohu'),
-            md5: build('md5')
+            data: buildResponse('nohu')
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+// API lấy dữ liệu Tài Xỉu MD5
+app.get('/md5', (req, res) => {
+    try {
+        res.json({
+            system: "TUANX3000-ULTIMATE",
+            admin: "TUANX3000",
+            game: "TÀI XỈU MD5",
+            update_at: new Date().toLocaleString('vi-VN'),
+            data: buildResponse('md5')
         });
     } catch (err) {
         console.error(err);
@@ -264,6 +281,8 @@ app.get('/reset', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`🚀 TUANX3000 ULTIMATE ONLINE PORT ${PORT}`);
+    console.log(`👉 API Nổ Hũ: http://localhost:${PORT}/nohu`);
+    console.log(`👉 API MD5:   http://localhost:${PORT}/md5`);
     syncGameData('nohu');
     syncGameData('md5');
 });
