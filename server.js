@@ -1,4 +1,4 @@
-Const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
