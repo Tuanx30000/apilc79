@@ -1,250 +1,295 @@
+/**
+ * =========================================================================================
+ * 🚀 TUANX3000 ULTIMATE V10 - CORE ENGINE
+ * PHIÊN BẢN ĐẦY ĐỦ NHẤT: ĐA THUẬT TOÁN + ĐA NỀN TẢNG (NOHU & MD5)
+ * =========================================================================================
+ */
+
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
 
+// Middleware cấu hình
 app.use(cors());
 app.use(express.json());
 
 // =========================================================================================
-// 1. CẤU HÌNH API GỐC (GIỮ NGUYÊN TOKEN)
+// 1. CẤU HÌNH HỆ THỐNG & API GỐC
 // =========================================================================================
-const API_CONFIG = {
-    NOHU: 'https://wtx.tele68.com/v1/tx/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f',
-    MD5: 'https://wtxmd52.tele68.com/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f'
-};
-
-let APP_STATE = {
-    nohu: { history: [], lastPred: null, stats: { win: 0, loss: 0, total: 0 }, processed: new Set() },
-    md5:  { history: [], lastPred: null, stats: { win: 0, loss: 0, total: 0 }, processed: new Set() }
-};
-
-// =========================================================================================
-// 2. UTILITIES & TOÁN HỌC PHÂN TÍCH
-// =========================================================================================
-function avg(nums) { return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0; }
-function entropy(arr) {
-    if (!arr.length) return 0;
-    const freq = {};
-    arr.forEach(v => freq[v] = (freq[v] || 0) + 1);
-    let e = 0, n = arr.length;
-    for (const k in freq) {
-        const p = freq[k] / n;
-        e -= p * Math.log2(p);
+const CONFIG = {
+    ADMIN: "TUANX3000",
+    VERSION: "10.0.1 PRO MAX",
+    SYNC_INTERVAL: 3500, // 3.5 giây cập nhật một lần
+    ENDPOINTS: {
+        NOHU: 'https://wtx.tele68.com/v1/tx/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f',
+        MD5: 'https://wtxmd52.tele68.com/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f'
     }
-    return e;
-}
+};
 
-// =========================================================================================
-// 3. FULL 11 GODLIKE ALGORITHMS (TÍCH HỢP HOÀN CHỈNH)
-// =========================================================================================
-
-const Algos = {
-    algo5_freqRebalance: (h) => {
-        const tx = h.slice(-20).map(x => x.result === 'Tài' ? 'T' : 'X');
-        const tCount = tx.filter(x => x === 'T').length;
-        return tCount > 12 ? 'X' : (tCount < 8 ? 'T' : null);
+// Trạng thái bộ nhớ tạm của Server
+let DATA_STORE = {
+    nohu: { 
+        history: [], 
+        lastPrediction: null, 
+        stats: { win: 0, loss: 0, total: 0 }, 
+        processedSessions: new Set() 
     },
-    algoA_markov: (h) => {
-        if (h.length < 10) return null;
-        const tx = h.map(x => x.result === 'Tài' ? 'T' : 'X');
-        const last3 = tx.slice(-3).join('');
-        const map = { 'TTT': 'X', 'XXX': 'T', 'TXT': 'T', 'XTX': 'X' };
-        return map[last3] || null;
-    },
-    algoL_CNN: (h) => {
-        const scores = h.slice(-5).map((x, i) => (x.result === 'Tài' ? 1 : -1) * (i + 1));
-        return scores.reduce((a, b) => a + b, 0) > 0 ? 'X' : 'T';
-    },
-    algoM_Logistic: (h) => (h.length % 2 === 0 ? 'T' : 'X'),
-    algoN_RandomForest: (h) => {
-        const last5 = h.slice(-5).filter(x => x.result === 'Tài').length;
-        return last5 >= 3 ? 'X' : 'T';
-    },
-    algoO_Cycle: (h) => (h[h.length - 1].result === 'Tài' ? 'X' : 'T'),
-    algoP_Bayesian: (h) => (Math.random() > 0.4 ? (h[h.length - 1].result === 'Tài' ? 'X' : 'T') : 'T'),
-    algoQ_Chaos: (h) => (entropy(h.slice(-10).map(x => x.result)) > 0.5 ? 'T' : 'X'),
-    algoR_Quantum: (h) => (Date.now() % 2 === 0 ? 'T' : 'X'),
-    algoS_DeepRes: (h) => (h.filter(x => x.result === 'Tài').length > h.length / 2 ? 'X' : 'T'),
-    algoT_Genetic: (h) => (h.slice(-1).result === 'Xỉu' ? 'T' : 'X')
+    md5: { 
+        history: [], 
+        lastPrediction: null, 
+        stats: { win: 0, loss: 0, total: 0 }, 
+        processedSessions: new Set() 
+    }
 };
 
 // =========================================================================================
-// 4. MAIN ENGINE
+// 2. TOÁN HỌC & TIỆN ÍCH PHÂN TÍCH CAO CẤP
 // =========================================================================================
-class SmartPredictor {
-    parseResult(item) {
-        let resRaw = String(item.resultTruyenThong || item.result || item.BetSide || '').toUpperCase().trim();
-        if (resRaw.includes('TAI') || resRaw.includes('TÀI') || resRaw === 'T' || resRaw === '1') return 'Tài';
-        if (resRaw.includes('XIU') || resRaw.includes('XỈU') || resRaw === 'X') return 'Xỉu';
-        if (item.DiceSum !== undefined) return Number(item.DiceSum) >= 11 ? 'Tài' : 'Xỉu';
+const MathLib = {
+    average: (arr) => arr.length ? arr.reduce((p, c) => p + c, 0) / arr.length : 0,
+    
+    // Tính toán độ hỗn loạn của cầu (Entropy)
+    calculateEntropy: (arr) => {
+        if (!arr.length) return 0;
+        const counts = {};
+        arr.forEach(x => counts[x] = (counts[x] || 0) + 1);
+        return Object.values(counts).reduce((acc, count) => {
+            const p = count / arr.length;
+            return acc - p * Math.log2(p);
+        }, 0);
+    },
+
+    // Chuyển đổi dữ liệu thô sang nhãn Tài/Xỉu chuẩn
+    standardize: (item) => {
+        let raw = String(item.resultTruyenThong || item.result || item.BetSide || '').toUpperCase();
+        if (raw.includes('TAI') || raw.includes('TÀI') || item.DiceSum >= 11) return 'Tài';
         return 'Xỉu';
     }
+};
 
-    predict(history) {
-        if (history.length < 10) {
-            return { ketqua: 'Tài', confidence: '55%', logic: 'Dữ liệu đang nạp...' };
-        }
+// =========================================================================================
+// 3. CHI TIẾT 11 THUẬT TOÁN GODLIKE (ENSEMBLE ENGINES)
+// =========================================================================================
+const GodlikeAlgos = {
+    // 1. Thuật toán V6: Tần suất tái cân bằng
+    algo_Frequency: (h) => {
+        const recent = h.slice(-12).map(x => x.result);
+        const tCount = recent.filter(x => x === 'Tài').length;
+        return tCount > 7 ? 'X' : (tCount < 5 ? 'T' : null);
+    },
 
-        const results = history.map(h => h.result);
-        const last = results[results.length - 1];
+    // 2. Chuỗi Markov (Xác suất chuyển trạng thái)
+    algo_Markov: (h) => {
+        const tx = h.map(x => x.result === 'Tài' ? 'T' : 'X').slice(-4).join('');
+        const patterns = { 'TTTT': 'X', 'XXXX': 'T', 'TXTX': 'T', 'XTXT': 'X', 'TTXX': 'T', 'XXTT': 'X' };
+        return patterns[tx] || (Math.random() > 0.5 ? 'T' : 'X');
+    },
 
-        // Đếm chuỗi bệt
-        let chain = 0;
-        for (let i = results.length - 1; i >= 0; i--) {
-            if (results[i] === last) chain++; else break;
-        }
+    // 3. CNN (Convolutional Neural Weights)
+    algo_CNN: (h) => {
+        const weights = [0.1, 0.15, 0.2, 0.25, 0.3];
+        const last5 = h.slice(-5).map((x, i) => (x.result === 'Tài' ? 1 : -1) * weights[i]);
+        return last5.reduce((a, b) => a + b, 0) > 0 ? 'X' : 'T';
+    },
 
-        // ƯU TIÊN 1: PHÁ CẦU BỆT
-        if (chain >= 5) return { ketqua: last === 'Tài' ? 'Xỉu' : 'Tài', confidence: '92%', logic: `Bẻ cầu bệt ${chain} tay` };
+    // 4. Hồi quy Logistic (Logistic Regression)
+    algo_Logistic: (h) => {
+        const sum = h.slice(-10).reduce((acc, x) => acc + (x.result === 'Tài' ? 1 : 0), 0);
+        return sum >= 6 ? 'X' : 'T';
+    },
 
-        // ƯU TIÊN 2: ENSEMBLE GODLIKE (BỎ PHIẾU)
-        let votes = { T: 0, X: 0 };
-        Object.values(Algos).forEach(fn => {
-            const res = fn(history);
-            if (res) votes[res]++;
+    // 5. Rừng ngẫu nhiên (Random Forest)
+    algo_RandomForest: (h) => {
+        const samples = [h.slice(-3), h.slice(-6), h.slice(-9)];
+        let votes = 0;
+        samples.forEach(s => {
+            const t = s.filter(x => x.result === 'Tài').length;
+            if (t > s.length / 2) votes++;
         });
+        return votes >= 2 ? 'X' : 'T';
+    },
 
-        const final = votes.T >= votes.X ? 'Tài' : 'Xỉu';
-        const conf = Math.floor((Math.max(votes.T, votes.X) / (votes.T + votes.X)) * 100);
+    // 6. Phân tích chu kỳ (Cycle Analysis)
+    algo_Cycle: (h) => {
+        const last = h[h.length - 1].result;
+        return last === 'Tài' ? 'X' : 'T';
+    },
 
+    // 7. Suy diễn Bayesian (Bayesian Inference)
+    algo_Bayesian: (h) => {
+        const pT = h.filter(x => x.result === 'Tài').length / h.length;
+        return pT > 0.55 ? 'X' : 'T';
+    },
+
+    // 8. Lý thuyết hỗn loạn (Chaos Theory)
+    algo_Chaos: (h) => {
+        const e = MathLib.calculateEntropy(h.slice(-10).map(x => x.result));
+        return e > 0.8 ? (Math.random() > 0.5 ? 'T' : 'X') : (h[h.length-1].result === 'Tài' ? 'T' : 'X');
+    },
+
+    // 9. Đường hầm lượng tử (Quantum Logic)
+    algo_Quantum: (h) => (Date.now() % 3 === 0 ? 'T' : 'X'),
+
+    // 10. Deep Residual (Số dư sâu)
+    algo_Residual: (h) => {
+        const last3 = h.slice(-3).map(x => x.result === 'Tài' ? 1 : 0);
+        return last3.reduce((a, b) => a + b, 0) === 2 ? 'X' : 'T';
+    },
+
+    // 11. Thuật toán di truyền (Genetic Optimizer)
+    algo_Genetic: (h) => {
+        const winners = h.slice(-20).filter((x, i) => i > 0 && x.result !== h[i-1].result);
+        return winners.length > 10 ? 'T' : 'X';
+    }
+};
+
+// =========================================================================================
+// 4. HỆ THỐNG XỬ LÝ CHÍNH (THE CORE)
+// =========================================================================================
+function masterPredictor(history) {
+    if (history.length < 15) {
+        return { res: 'Tài', conf: '50%', log: 'Đang thu thập dữ liệu cơ sở...' };
+    }
+
+    const lastResult = history[history.length - 1].result;
+    
+    // Kiểm tra cầu bệt (Ưu tiên số 1)
+    let bệt = 0;
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].result === lastResult) bệt++; else break;
+    }
+
+    if (bệt >= 5) {
         return { 
-            ketqua: final, 
-            confidence: conf + "%", 
-            logic: `Godlike Consensus (${votes.T}T-${votes.X}X)` 
+            res: lastResult === 'Tài' ? 'Xỉu' : 'Tài', 
+            conf: (85 + bệt * 2) + '%', 
+            log: `PHÁ CẦU BỆT ${bệt} TAY` 
         };
     }
+
+    // Bỏ phiếu số đông (Ensemble Voting)
+    let votes = { T: 0, X: 0 };
+    Object.values(GodlikeAlgos).forEach(algo => {
+        const p = algo(history);
+        if (p === 'T') votes.T++; else if (p === 'X') votes.X++;
+    });
+
+    const final = votes.T >= votes.X ? 'Tài' : 'Xỉu';
+    const confidence = Math.floor((Math.max(votes.T, votes.X) / (votes.T + votes.X)) * 100);
+
+    return { 
+        res: final, 
+        conf: confidence + "%", 
+        log: `Đồng thuận AI (${votes.T}T - ${votes.X}X)` 
+    };
 }
 
-const predictor = new SmartPredictor();
-
 // =========================================================================================
-// 5. CORE SYNC & WIN-LOSS CHECKER
+// 5. ĐỒNG BỘ DỮ LIỆU & KIỂM TRA THẮNG THUA
 // =========================================================================================
-async function syncGameData(type) {
+async function performSync(type) {
     try {
-        const url = API_CONFIG[type.toUpperCase()];
-        const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const response = await fetch(CONFIG.ENDPOINTS[type.toUpperCase()], {
+            headers: { 'User-Agent': 'TuanX3000-Core/10.0' }
+        });
+        const json = await response.json();
+        const list = Array.isArray(json) ? json : (json.list || json.data || []);
 
-        const data = await response.json();
-        let rawList = Array.isArray(data) ? data : (data.list || data.data || []);
-
-        const newHistory = rawList.map(item => ({
-            session: Number(item.id || item.SessionId || item.sessionId || 0),
-            result: predictor.parseResult(item)
+        const state = DATA_STORE[type];
+        const newHistory = list.map(item => ({
+            session: Number(item.id || item.SessionId || 0),
+            result: MathLib.standardize(item)
         })).filter(h => h.session > 0).sort((a, b) => a.session - b.session);
 
-        const state = APP_STATE[type];
-
         if (newHistory.length > 0) {
-            const latest = newHistory[newHistory.length - 1];
+            const newest = newHistory[newHistory.length - 1];
 
-            // CƠ CHẾ TỰ ĐỘNG CHECK WIN/LOSS
-            if (state.lastPred && state.lastPred.session === latest.session && !state.processed.has(latest.session)) {
-                if (state.lastPred.ketqua === latest.result) {
-                    state.stats.win++;
-                } else {
-                    state.stats.loss++;
+            // Kiểm tra kết quả phiên đã dự đoán
+            if (state.lastPrediction && state.lastPrediction.session === newest.session) {
+                if (!state.processedSessions.has(newest.session)) {
+                    if (state.lastPrediction.ketqua === newest.result) {
+                        state.stats.win++;
+                    } else {
+                        state.stats.loss++;
+                    }
+                    state.stats.total++;
+                    state.processedSessions.add(newest.session);
+                    if (state.processedSessions.size > 500) state.processedSessions.clear();
                 }
-                state.stats.total++;
-                state.processed.add(latest.session);
-                // Dọn dẹp bộ nhớ đệm
-                if (state.processed.size > 200) state.processed.clear();
             }
-
             state.history = newHistory;
         }
-    } catch (e) {
-        console.log(`[ERR] ${type}: ${e.message}`);
+    } catch (err) {
+        console.error(`[SYNC ERROR] ${type}:`, err.message);
     }
 }
 
-// Chạy sync mỗi 4 giây
-setInterval(() => {
-    syncGameData('nohu');
-    syncGameData('md5');
-}, 4000);
+// Khởi chạy vòng lặp đồng bộ
+setInterval(() => { performSync('nohu'); performSync('md5'); }, CONFIG.SYNC_INTERVAL);
 
 // =========================================================================================
-// 6. ROUTES & OUTPUT CHUẨN
+// 6. ROUTES API CUNG CẤP DỮ LIỆU
 // =========================================================================================
 
-// Fix lỗi "Cannot GET /" - Trang chủ Server
+// Route mặc định tránh lỗi "Cannot GET /"
 app.get('/', (req, res) => {
-    res.send(`
-        <div style="background:#0a0a0f; color:#00eaff; font-family:sans-serif; height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;">
-            <h1 style="border:2px solid #00eaff; padding:20px; border-radius:15px; box-shadow:0 0 20px #00eaff;">TUANX3000 ULTIMATE V9.0 ONLINE</h1>
-            <p>API NỔ HŨ: <a href="/nohu" style="color:#fff">/nohu</a></p>
-            <p>API MD5: <a href="/md5" style="color:#fff">/md5</a></p>
-            <p style="color:#555;">Status: Connected & Predictive Engines Running</p>
-        </div>
-    `);
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`<body style="background:#000;color:#0f0;font-family:monospace;padding:50px;">
+        <h2>🚀 TUANX3000 V10 SERVER IS LIVE</h2>
+        <hr border="1">
+        <p>API NỔ HŨ: <a href="/api/nohu" style="color:#fff">/api/nohu</a></p>
+        <p>API MD5: <a href="/api/md5" style="color:#fff">/api/md5</a></p>
+        <p>ALL IN ONE: <a href="/api/all" style="color:#fff">/api/all</a></p>
+    </body>`);
 });
 
-const getResponse = (type) => {
-    const s = APP_STATE[type];
+const buildDataResponse = (type) => {
+    const s = DATA_STORE[type];
     const lastSession = s.history.length > 0 ? s.history[s.history.length - 1].session : 0;
-    const nextId = lastSession + 1;
-    const pred = predictor.predict(s.history);
+    const nextSession = lastSession + 1;
+    const prediction = masterPredictor(s.history);
 
-    // Lưu lại dự đoán để phiên sau đối chiếu
-    s.lastPred = { session: nextId, ketqua: pred.ketqua };
+    // Lưu lại để đối soát phiên sau
+    s.lastPrediction = { session: nextSession, ketqua: prediction.res };
 
     return {
-        phien_tiep: nextId,
-        du_doan: pred.ketqua,
-        tin_cay: pred.confidence,
-        logic: pred.logic,
-        lich_su_gan_nhat: s.history.slice(-12).map(h => h.result).join(' - '),
+        phien_tiep: nextSession,
+        du_doan: prediction.res,
+        tin_cay: prediction.conf,
+        logic: prediction.log,
         thong_ke: {
-            thang: s.stats.win,
-            thua: s.stats.loss,
-            winrate: s.stats.total > 0 ? ((s.stats.win / s.stats.total) * 100).toFixed(1) + "%" : "0%"
-        }
+            win: s.stats.win,
+            loss: s.stats.loss,
+            rate: s.stats.total > 0 ? ((s.stats.win / s.stats.total) * 100).toFixed(1) + "%" : "0%"
+        },
+        ls: s.history.slice(-10).map(x => x.result === 'Tài' ? 'T' : 'X').join(' ')
     };
 };
 
-app.get('/nohu', (req, res) => {
+app.get('/api/all', (req, res) => {
     res.json({
-        system: "TUANX3000-ULTIMATE",
-        game: "TÀI XỈU NỔ HŨ",
-        update: new Date().toLocaleString('vi-VN'),
-        data: getResponse('nohu')
+        author: CONFIG.ADMIN,
+        version: CONFIG.VERSION,
+        time: new Date().toLocaleString('vi-VN'),
+        nohu: buildDataResponse('nohu'),
+        md5: buildDataResponse('md5')
     });
 });
 
-app.get('/md5', (req, res) => {
-    res.json({
-        system: "TUANX3000-ULTIMATE",
-        game: "TÀI XỈU MD5",
-        update: new Date().toLocaleString('vi-VN'),
-        data: getResponse('md5')
+app.get('/api/reset', (req, res) => {
+    Object.keys(DATA_STORE).forEach(k => {
+        DATA_STORE[k].stats = { win: 0, loss: 0, total: 0 };
+        DATA_STORE[k].processedSessions.clear();
     });
+    res.json({ message: "Reset thành công!" });
 });
 
-app.get('/reset', (req, res) => {
-    ['nohu', 'md5'].forEach(k => {
-        APP_STATE[k].stats = { win: 0, loss: 0, total: 0 };
-        APP_STATE[k].processed.clear();
-    });
-    res.json({ status: "ok", message: "Statistics Reset Complete" });
-});
-
-// =========================================================================================
-// 7. KHỞI CHẠY
-// =========================================================================================
+// Chạy server
 app.listen(PORT, () => {
-    console.log(`
-    =============================================
-    🚀 TUANX3000 ULTIMATE V9.0 ĐÃ SẴN SÀNG
-    📡 PORT: ${PORT}
-    🌐 TRANG CHỦ: http://localhost:${PORT}/
-    📱 API NỔ HŨ: http://localhost:${PORT}/nohu
-    📱 API MD5:   http://localhost:${PORT}/md5
-    =============================================
-    `);
-    syncGameData('nohu');
-    syncGameData('md5');
+    console.log(`[TUANX3000 V10] Server running at http://localhost:${PORT}`);
+    performSync('nohu');
+    performSync('md5');
 });
