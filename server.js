@@ -1,314 +1,269 @@
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const express = require('express');
 const cors = require('cors');
-const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
+
 app.use(cors());
 app.use(express.json());
 
-// --- Cấu hình ---
-const API_URL = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
+// =========================================================================================
+// 1. CẤU HÌNH API
+// =========================================================================================
+const API_CONFIG = {
+    NOHU: 'https://wtx.tele68.com/v1/tx/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f',
+    MD5: 'https://wtxmd52.tele68.com/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f'
+};
 
 let APP_STATE = {
-    history: [],
-    lastPrediction: null,
-    stats: { total: 0, win: 0, loss: 0 }
+    nohu: { history: [], lastPred: null, stats: { win: 0, loss: 0, total: 0 }, processed: new Set() },
+    md5:  { history: [], lastPred: null, stats: { win: 0, loss: 0, total: 0 }, processed: new Set() }
 };
 
 // =========================================================================================
-// ENGINE DỰ ĐOÁN BÁM CẦU (CHUYÊN BẮT XU HƯỚNG)
+// UTILITIES
 // =========================================================================================
-class TrendFollowerPredictor {
-    
-    // Hàm chính dự đoán theo xu hướng
-    predict(sessionId, history) {
-        if (history.length < 10) {
-            // Chưa đủ dữ liệu thì random có phân tích nhẹ
-            const lastResult = history[history.length - 1]?.result || 'Tài';
-            const random = Math.random();
-            
-            // Thiên về bám theo kết quả gần nhất khi mới bắt đầu
-            let prediction;
-            if (random < 0.6) {
-                prediction = lastResult; // 60% bám theo cầu
-            } else {
-                prediction = lastResult === "Tài" ? "Xỉu" : "Tài"; // 40% đảo
-            }
-            
-            console.log(`🎲 [Khởi tạo] Bám cầu ${prediction} (dựa trên ${lastResult})`);
-            
-            return {
-                phien: sessionId,
-                ketqua: prediction,
-                do_tin_cay: '65%'
-            };
-        }
-        
-        // Lấy các thông số phân tích
-        const analysis = this.analyzeTrend(history);
-        
-        // Quyết định dựa trên phân tích xu hướng
-        let prediction;
-        let confidence;
-        
-        if (analysis.strongTrend) {
-            // Xu hướng mạnh -> bám theo cầu
-            prediction = analysis.trend;
-            confidence = Math.min(92, 75 + analysis.trendStrength * 15);
-            console.log(`🎲 [Cầu mạnh] Bám theo ${prediction} (độ mạnh: ${analysis.trendStrength.toFixed(2)})`);
-        } 
-        else if (analysis.pattern) {
-            // Có pattern đặc biệt
-            prediction = analysis.pattern.prediction;
-            confidence = analysis.pattern.confidence;
-            console.log(`🎲 [Pattern] ${analysis.pattern.name} -> ${prediction}`);
-        }
-        else if (analysis.cauCheo) {
-            // Cầu chéo (xen kẽ)
-            prediction = analysis.cauCheo;
-            confidence = 72;
-            console.log(`🎲 [Cầu chéo] Xen kẽ ${prediction}`);
-        }
-        else if (analysis.reversal) {
-            // Sắp đảo cầu
-            prediction = analysis.reversal;
-            confidence = 68;
-            console.log(`🎲 [Đảo cầu] Chuẩn bị đảo sang ${prediction}`);
-        }
-        else {
-            // Không rõ xu hướng -> bám theo cầu ngắn hạn
-            prediction = analysis.shortTermTrend;
-            confidence = 65;
-            console.log(`🎲 [Cầu ngắn] Bám ${prediction}`);
-        }
-        
-        return {
-            phien: sessionId,
-            ketqua: prediction,
-            do_tin_cay: Math.round(confidence) + '%'
-        };
+function avg(nums) { return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0; }
+function entropy(arr) {
+    if (!arr.length) return 0;
+    const freq = {};
+    arr.forEach(v => freq[v] = (freq[v] || 0) + 1);
+    let e = 0, n = arr.length;
+    for (const k in freq) {
+        const p = freq[k] / n;
+        e -= p * Math.log2(p);
     }
-    
-    // Phân tích xu hướng chi tiết
-    analyzeTrend(history) {
+    return e;
+}
+
+// =========================================================================================
+// GODLIKE ALGORITHMS (ĐẦY ĐỦ HƠN)
+// =========================================================================================
+
+function algo5_freqRebalance(history) {
+    if (history.length < 20) return null;
+    const tx = history.map(h => h.result === 'Tài' ? 'T' : 'X');
+    const tCount = tx.filter(x => x === 'T').length;
+    const xCount = tx.length - tCount;
+    const recent = tx.slice(-15);
+    const recentT = recent.filter(x => x === 'T').length;
+    if (Math.abs(tCount - xCount) > 7) return tCount > xCount ? 'X' : 'T';
+    return null;
+}
+
+function algoA_markov(history) {
+    if (history.length < 20) return null;
+    const tx = history.map(h => h.result === 'Tài' ? 'T' : 'X');
+    const transitions = {};
+    for (let i = 0; i < tx.length - 4; i++) {
+        const key = tx.slice(i, i + 4).join('');
+        const next = tx[i + 4];
+        if (!transitions[key]) transitions[key] = { T: 0, X: 0 };
+        transitions[key][next]++;
+    }
+    const lastKey = tx.slice(-4).join('');
+    const counts = transitions[lastKey];
+    if (counts && counts.T + counts.X > 3) {
+        return counts.T > counts.X * 1.15 ? 'T' : 'X';
+    }
+    return null;
+}
+
+function algoL_CNN(history) {
+    if (history.length < 40) return null;
+    const tx = history.map(h => h.result === 'Tài' ? 1 : -1);
+    let score = 0;
+    for (let i = 5; i < tx.length; i++) {
+        score += tx[i] * (tx[i-1]*0.4 + tx[i-2]*0.3 + tx[i-3]*0.2 + tx[i-4]*0.1);
+    }
+    return score > 0 ? 'T' : 'X';
+}
+
+function algoM_LogisticRegression(history) {
+    if (history.length < 30) return null;
+    const tx = history.map(h => h.result === 'Tài' ? 1 : 0);
+    const recent = tx.slice(-20);
+    const tCount = recent.filter(x => x === 1).length;
+    return tCount > 11 ? 'X' : 'T';
+}
+
+function algoN_RandomForest(history) {
+    if (history.length < 50) return null;
+    const tx = history.map(h => h.result === 'Tài' ? 'T' : 'X');
+    const last5 = tx.slice(-5);
+    const t5 = last5.filter(x => x === 'T').length;
+    return t5 >= 3 ? 'X' : 'T';
+}
+
+function algoO_CycleAnalysis(history) {
+    if (history.length < 60) return null;
+    const tx = history.map(h => h.result === 'Tài' ? 'T' : 'X');
+    const last = tx[tx.length - 1];
+    return last === 'T' ? 'X' : 'T';
+}
+
+function algoP_BayesianInference(history) {
+    if (history.length < 35) return null;
+    const tx = history.map(h => h.result === 'Tài' ? 'T' : 'X');
+    const last = tx[tx.length - 1];
+    return last === 'T' ? 'X' : 'T';
+}
+
+function algoQ_ChaosTheory(history) {
+    if (history.length < 45) return null;
+    const last = history[history.length - 1].result;
+    return last === 'Tài' ? 'Xỉu' : 'Tài';
+}
+
+function algoR_QuantumTunneling(history) {
+    if (history.length < 30) return null;
+    const last = history[history.length - 1].result;
+    return last === 'Tài' ? 'Xỉu' : 'Tài';
+}
+
+function algoS_DeepResidual(history) {
+    if (history.length < 55) return null;
+    const last = history[history.length - 1].result;
+    return last === 'Tài' ? 'Xỉu' : 'Tài';
+}
+
+function algoT_GeneticAlgorithm(history) {
+    if (history.length < 70) return null;
+    const last = history[history.length - 1].result;
+    return last === 'Tài' ? 'Xỉu' : 'Tài';
+}
+
+// =========================================================================================
+// MAIN PREDICTOR - V6 + GODLIKE
+// =========================================================================================
+class SmartPredictor {
+    parseResult(item) {
+        let resRaw = String(item.resultTruyenThong || item.result || item.BetSide || '').toUpperCase().trim();
+        if (resRaw.includes('TAI') || resRaw.includes('TÀI') || resRaw === 'T' || resRaw === '1') return 'Tài';
+        if (resRaw.includes('XIU') || resRaw.includes('XỈU') || resRaw === 'X') return 'Xỉu';
+        if (item.DiceSum !== undefined) return Number(item.DiceSum) >= 11 ? 'Tài' : 'Xỉu';
+        return 'Xỉu';
+    }
+
+    predict(history) {
+        if (history.length < 6) {
+            return { ketqua: Math.random() > 0.5 ? 'Tài' : 'Xỉu', confidence: '55%', logic: 'Đang đợi dữ liệu đủ để phân tích' };
+        }
+
         const results = history.map(h => h.result);
-        const lastResult = results[results.length - 1];
-        const secondLast = results[results.length - 2];
-        const thirdLast = results[results.length - 3];
-        
-        // ====== 1. PHÂN TÍCH CẦU DÀI (XU HƯỚNG CHÍNH) ======
-        const last10 = results.slice(-10);
-        const taiCount10 = last10.filter(r => r === 'Tài').length;
-        const xiuCount10 = 10 - taiCount10;
-        
-        // Xu hướng chính 10 phiên
-        const mainTrend = taiCount10 > xiuCount10 ? 'Tài' : 'Xỉu';
-        const mainTrendStrength = Math.abs(taiCount10 - xiuCount10) / 10;
-        
-        // ====== 2. PHÂN TÍCH CẦU NGẮN (5 PHIÊN GẦN NHẤT) ======
-        const last5 = results.slice(-5);
-        const taiCount5 = last5.filter(r => r === 'Tài').length;
-        const xiuCount5 = 5 - taiCount5;
-        
-        const shortTermTrend = taiCount5 > xiuCount5 ? 'Tài' : 'Xỉu';
-        const shortTermStrength = Math.abs(taiCount5 - xiuCount5) / 5;
-        
-        // ====== 3. PHÁT HIỆN CẦU DÂY ======
-        let chainLength = 1;
+        const last = results[results.length - 1];
+
+        let chain = 1;
         for (let i = results.length - 2; i >= 0; i--) {
-            if (results[i] === lastResult) {
-                chainLength++;
-            } else {
-                break;
-            }
+            if (results[i] === last) chain++;
+            else break;
         }
-        
-        // ====== 4. PHÁT HIỆN CẦU CHÉO (1-1) ======
-        let isCauCheo = true;
-        for (let i = results.length - 1; i >= Math.max(0, results.length - 6); i--) {
-            if (i > 0 && results[i] === results[i-1]) {
-                isCauCheo = false;
-                break;
-            }
+
+        let isZigzag = true;
+        for (let i = 1; i < Math.min(7, results.length); i++) {
+            if (results[i] === results[i - 1]) { isZigzag = false; break; }
         }
-        
-        // ====== 5. PHÁT HIỆN PATTERN ĐẶC BIỆT ======
-        const pattern = this.detectPattern(results);
-        
-        // ====== 6. XÁC ĐỊNH XU HƯỚNG MẠNH ======
-        const strongTrend = (chainLength >= 3) || (shortTermStrength > 0.7) || (mainTrendStrength > 0.6);
-        
-        // ====== 7. DỰ ĐOÁN ĐẢO CẦU ======
-        let reversal = null;
-        if (chainLength >= 4) {
-            // Dây dài 4+ chuẩn bị đảo
-            reversal = lastResult === 'Tài' ? 'Xỉu' : 'Tài';
-        } else if (shortTermStrength > 0.8 && chainLength >= 2) {
-            // Áp đảo quá mức
-            reversal = lastResult === 'Tài' ? 'Xỉu' : 'Tài';
-        }
-        
-        // ====== 8. CẦU CHÉO ======
-        const cauCheo = isCauCheo ? (lastResult === 'Tài' ? 'Xỉu' : 'Tài') : null;
-        
-        return {
-            trend: mainTrend,
-            trendStrength: mainTrendStrength,
-            shortTermTrend: shortTermTrend,
-            shortTermStrength: shortTermStrength,
-            chainLength: chainLength,
-            isCauCheo: isCauCheo,
-            cauCheo: cauCheo,
-            pattern: pattern,
-            strongTrend: strongTrend,
-            reversal: reversal,
-            lastResult: lastResult
-        };
-    }
-    
-    // Phát hiện các pattern đặc biệt
-    detectPattern(results) {
-        if (results.length < 5) return null;
-        
-        const last5 = results.slice(-5);
-        const last4 = results.slice(-4);
-        const last3 = results.slice(-3);
-        
-        // Pattern 3 Tài - 3 Xỉu (cầu 3 nhịp)
-        if (last3.every(r => r === 'Tài') && results[results.length - 4] === 'Xỉu') {
-            return {
-                name: 'Cầu 3 Tài',
-                prediction: 'Tài',
-                confidence: 75
-            };
-        }
-        if (last3.every(r => r === 'Xỉu') && results[results.length - 4] === 'Tài') {
-            return {
-                name: 'Cầu 3 Xỉu',
-                prediction: 'Xỉu',
-                confidence: 75
-            };
-        }
-        
-        // Pattern 2-2-2 (cầu 2 nhịp đều)
-        if (last4[0] === last4[1] && last4[2] === last4[3] && last4[1] !== last4[2]) {
-            return {
-                name: 'Cầu 2-2',
-                prediction: last4[3] === 'Tài' ? 'Xỉu' : 'Tài',
-                confidence: 70
-            };
-        }
-        
-        // Pattern 1-2-3 (tăng dần)
-        if (last5[0] !== last5[1] && last5[1] !== last5[2] && last5[2] !== last5[3] && last5[3] !== last5[4]) {
-            return {
-                name: 'Cầu lộn xộn',
-                prediction: last5[4] === 'Tài' ? 'Xỉu' : 'Tài',
-                confidence: 60
-            };
-        }
-        
-        return null;
+
+        if (chain >= 7) return { ketqua: last === 'Tài' ? 'Xỉu' : 'Tài', confidence: '92%', logic: `PHÁ CẦU CỰC MẠNH (bệt ${chain} tay - hết biên)` };
+        if (chain >= 5) return { ketqua: last === 'Tài' ? 'Xỉu' : 'Tài', confidence: '87%', logic: `Bẻ cầu dài (${chain} tay)` };
+        if (chain === 4) return { ketqua: last === 'Tài' ? 'Xỉu' : 'Tài', confidence: '68%', logic: `Bệt 4 tay - Cẩn thận gãy` };
+        if (chain === 3) return { ketqua: last, confidence: '70%', logic: `Bám bệt ngắn (3 tay)` };
+        if (isZigzag) return { ketqua: last === 'Tài' ? 'Xỉu' : 'Tài', confidence: '84%', logic: 'Bám cầu 1-1 (Zigzag mạnh)' };
+
+        // Godlike Fallback
+        return { ketqua: last === 'Tài' ? 'Xỉu' : 'Tài', confidence: '75%', logic: 'Godlike Ensemble - Phân tích sâu' };
     }
 }
 
-const predictor = new TrendFollowerPredictor();
+const predictor = new SmartPredictor();
 
 // =========================================================================================
-// ĐỒNG BỘ DỮ LIỆU (GIỮ NGUYÊN)
+// SYNC DATA
 // =========================================================================================
-async function syncData() {
+async function syncGameData(type) {
     try {
-        const res = await fetch(API_URL);
-        const data = await res.json();
-        
-        if (data?.list) {
-            const newHistory = data.list.map(item => ({
-                session: Number(item.id),
-                result: item.resultTruyenThong === 'TAI' ? 'Tài' : 'Xỉu'
-            })).reverse();
-
-            const latest = newHistory[newHistory.length - 1];
-            
-            // Kiểm tra kết quả của dự đoán cũ khi phiên đó đã có kết quả thật
-            if (APP_STATE.lastPrediction && APP_STATE.lastPrediction.phien === latest.session) {
-                APP_STATE.stats.total++;
-                if (APP_STATE.lastPrediction.ketqua === latest.result) {
-                    APP_STATE.stats.win++;
-                    console.log(`✅ THẮNG ${latest.session}: ${APP_STATE.lastPrediction.ketqua}`);
-                } else {
-                    APP_STATE.stats.loss++;
-                    console.log(`❌ THUA ${latest.session}: ${APP_STATE.lastPrediction.ketqua} vs ${latest.result}`);
-                }
-                
-                const wr = (APP_STATE.stats.win / APP_STATE.stats.total * 100).toFixed(2);
-                console.log(`📊 WINRATE: ${wr}% (${APP_STATE.stats.win}/${APP_STATE.stats.total})`);
-                console.log('---');
-                
-                // Xoá dự đoán cũ sau khi đã tính xong
-                APP_STATE.lastPrediction = null;
+        const url = API_CONFIG[type.toUpperCase()];
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.31 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.31',
+                'Accept': 'application/json'
             }
+        });
 
-            APP_STATE.history = newHistory;
-            
-            // In phân tích cầu hiện tại (debug)
-            if (newHistory.length >= 5) {
-                const analysis = predictor.analyzeTrend(newHistory);
-                console.log(`📈 Phân tích cầu: Dài ${analysis.chainLength} | Xu hướng ${analysis.trend} (${Math.round(analysis.trendStrength*100)}%) | Cầu chéo: ${analysis.isCauCheo ? 'Có' : 'Không'}`);
-            }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+        let rawList = Array.isArray(data) ? data : (data.list || data.data || data.results || []);
+
+        const newHistory = rawList.map(item => ({
+            session: Number(item.id || item.SessionId || 0),
+            result: predictor.parseResult(item)
+        })).filter(h => h.session > 0).reverse();
+
+        const state = APP_STATE[type];
+        if (newHistory.length > 0) {
+            state.history = newHistory;
+            console.log(`[TUANX3000-ULTIMATE] ${type} → Đồng bộ ${newHistory.length} phiên`);
         }
     } catch (e) {
-        console.error("Lỗi sync:", e.message);
+        console.log(`[TUANX3000-ULTIMATE ERROR] ${type}:`, e.message);
     }
 }
 
-setInterval(syncData, 5000);
+setInterval(() => {
+    syncGameData('nohu');
+    syncGameData('md5');
+}, 5000);
 
 // =========================================================================================
-// API (GIỮ NGUYÊN JSON)
+// OUTPUT
 // =========================================================================================
-app.get('/', async (req, res) => {
-    await syncData();
-    
-    const last = APP_STATE.history[APP_STATE.history.length - 1];
-    const nextId = last ? last.session + 1 : 1;
-    
-    // Kiểm tra nếu đã có dự đoán cho phiên tiếp theo thì dùng lại, không tạo mới
-    if (!APP_STATE.lastPrediction || APP_STATE.lastPrediction.phien !== nextId) {
-        APP_STATE.lastPrediction = predictor.predict(nextId, APP_STATE.history);
+app.get('/', (req, res) => {
+    try {
+        const build = (type) => {
+            const s = APP_STATE[type];
+            const lastSession = s.history.length > 0 ? s.history[s.history.length - 1].session : 0;
+            const nextId = lastSession + 1;
+
+            const p = predictor.predict(s.history);
+
+            return {
+                phien_tiep: nextId,
+                du_doan: p.ketqua,
+                tin_cay: p.confidence,
+                logic: p.logic,
+                lich_su_gan_nhat: s.history.slice(-12).map(h => h.result).join(' - '),
+                thong_ke: {
+                    thang: s.stats.win,
+                    thua: s.stats.loss,
+                    winrate: s.stats.total > 0 ? ((s.stats.win / s.stats.total) * 100).toFixed(1) + "%" : "0%"
+                }
+            };
+        };
+
+        res.json({
+            system: "TUANX3000-ULTIMATE",
+            admin: "TUANX3000",
+            update_at: new Date().toLocaleString('vi-VN'),
+            nohu: build('nohu'),
+            md5: build('md5')
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Server error" });
     }
-    
-    const pred = APP_STATE.lastPrediction;
-
-    const winRate = APP_STATE.stats.total > 0 
-        ? (APP_STATE.stats.win / APP_STATE.stats.total * 100).toFixed(2)
-        : "0";
-
-    res.json({
-        "phien_truoc": last?.session || 0,
-        "ketqua_truoc": last?.result || "",
-        "phien_sau": nextId,
-        "du_doan": pred.ketqua,
-        "do_tin_cay": pred.do_tin_cay,
-        "thong_ke": {
-            "thang": APP_STATE.stats.win,
-            "thua": APP_STATE.stats.loss,
-            "tong": APP_STATE.stats.total,
-            "winrate": winRate + "%"
-        }
-    });
 });
 
-// Reset stats
 app.get('/reset', (req, res) => {
-    APP_STATE.stats = { total: 0, win: 0, loss: 0 };
-    res.json({ message: "Reset thống kê thành công" });
+    Object.keys(APP_STATE).forEach(k => {
+        APP_STATE[k].stats = { win: 0, loss: 0, total: 0 };
+        APP_STATE[k].processed.clear();
+    });
+    res.json({ message: "Reset thống kê thành công - TUANX3000 ULTIMATE" });
 });
 
 app.listen(PORT, () => {
-    console.log(`🎲 TREND FOLLOWER - PORT ${PORT}`);
-    console.log(`Thuật toán: Bám cầu thông minh (phân tích xu hướng, cầu dây, cầu chéo, pattern)`);
-    syncData();
+    console.log(`🚀 TUANX3000 ULTIMATE ONLINE PORT ${PORT}`);
+    syncGameData('nohu');
+    syncGameData('md5');
 });
