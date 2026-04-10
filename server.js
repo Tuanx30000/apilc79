@@ -1,8 +1,8 @@
 /**
  * =========================================================================================
- * 🚀 TUANX3000 ULTIMATE V10.2 - ALL-IN-ONE CORE ENGINE
- * ADMIN: TUANX3000 | VERSION: 10.2 PRO MAX
- * ĐA THUẬT TOÁN + TRỌNG SỐ ĐỘNG + ĐU CẦU THÔNG MINH
+ * 🚀 TUANX3000 ULTIMATE V10.3 - THE FINAL ENGINE
+ * ADMIN: TUANX3000 | VERSION: 10.3 PRO MAX
+ * ĐA THUẬT TOÁN + AUTO-SYNC + ANTI-CRASH RAILWAY
  * =========================================================================================
  */
 
@@ -17,7 +17,7 @@ app.use(express.json());
 // 1. CẤU HÌNH HỆ THỐNG
 const CONFIG = {
     ADMIN: "TUANX3000",
-    VERSION: "10.2 PRO MAX",
+    VERSION: "10.3 PRO MAX",
     SYNC_INTERVAL: 3000,
     ENDPOINTS: {
         NOHU: 'https://wtx.tele68.com/v1/tx/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f',
@@ -25,198 +25,198 @@ const CONFIG = {
     }
 };
 
-// 2. BỘ NHỚ TẠM (RAM STORE)
+// 2. CƠ SỞ DỮ LIỆU TẠM THỜI
 let DATA_STORE = {
     nohu: { history: [], lastPrediction: null, stats: { win: 0, loss: 0, total: 0 }, processedSessions: new Set() },
     md5: { history: [], lastPrediction: null, stats: { win: 0, loss: 0, total: 0 }, processedSessions: new Set() }
 };
 
-// 3. THƯ VIỆN TOÁN HỌC & CHUẨN HÓA
-const MathLib = {
+// 3. CÔNG CỤ CHUẨN HÓA DỮ LIỆU
+const Utils = {
     standardize: (item) => {
         let raw = String(item.resultTruyenThong || item.result || item.BetSide || '').toUpperCase();
         if (raw.includes('TAI') || raw.includes('TÀI') || (item.DiceSum && item.DiceSum >= 11)) return 'Tài';
         return 'Xỉu';
-    },
-    calculateEntropy: (arr) => {
-        if (!arr.length) return 0;
-        const counts = {};
-        arr.forEach(x => counts[x] = (counts[x] || 0) + 1);
-        return Object.values(counts).reduce((acc, count) => {
-            const p = count / arr.length;
-            return acc - p * Math.log2(p);
-        }, 0);
     }
 };
 
-// 4. HỆ THỐNG 11 THUẬT TOÁN (CÓ TRỌNG SỐ)
+// 4. HỆ THỐNG PHÂN TÍCH (ALGORITHMS)
 const Algos = {
-    // Thuật toán chính (Trọng số cao)
-    markov: (h) => {
-        const tx = h.map(x => x.result === 'Tài' ? 'T' : 'X').slice(-4).join('');
+    markovChain: (h) => {
+        const last4 = h.map(x => x.result === 'Tài' ? 'T' : 'X').slice(-4).join('');
         const patterns = { 'TTTT': 'X', 'XXXX': 'T', 'TXTX': 'T', 'XTXT': 'X', 'TTXX': 'T', 'XXTT': 'X' };
-        return patterns[tx] || null;
+        return patterns[last4] || null;
     },
     frequency: (h) => {
-        const recent = h.slice(-10).filter(x => x.result === 'Tài').length;
-        return recent >= 7 ? 'X' : (recent <= 3 ? 'T' : null);
+        const countT = h.slice(-12).filter(x => x.result === 'Tài').length;
+        if (countT >= 8) return 'X';
+        if (countT <= 4) return 'T';
+        return null;
     },
-    bayesian: (h) => {
-        const pT = h.filter(x => x.result === 'Tài').length / h.length;
-        return pT > 0.6 ? 'X' : (pT < 0.4 ? 'T' : null);
-    },
-    // Thuật toán phụ
-    cnn_simple: (h) => h.slice(-3).every(x => x.result === 'Tài') ? 'X' : (h.slice(-3).every(x => x.result === 'Xỉu') ? 'T' : null),
-    logistic: (h) => h.slice(-5).filter(x => x.result === 'Tài').length >= 3 ? 'X' : 'T'
+    trendFollow: (h) => {
+        const last3 = h.slice(-3);
+        if (last3.length < 3) return null;
+        if (last3.every(v => v.result === last3[0].result)) return last3[0].result;
+        return null;
+    }
 };
 
-// 5. MASTER PREDICTOR (BỘ NÃO CHÍNH)
-function masterPredictor(history) {
-    if (history.length < 12) return { res: 'Đang đợi...', conf: '0%', log: 'Đang nạp dữ liệu...' };
+// 5. BỘ NÃO DỰ ĐOÁN TỔNG HỢP
+function predictNext(type) {
+    const history = DATA_STORE[type].history;
+    if (history.length < 10) return { res: 'N/A', conf: '0%', log: 'Đang nạp dữ liệu' };
 
     const lastResult = history[history.length - 1].result;
     
-    // --- BƯỚC 1: NHẬN DIỆN CẦU BỆT (TRỌNG YẾU) ---
+    // Kiểm tra bệt (Ưu tiên số 1)
     let streak = 0;
     for (let i = history.length - 1; i >= 0; i--) {
         if (history[i].result === lastResult) streak++; else break;
     }
 
-    // Nếu bệt từ 3-6 tay: Đu bệt (Theo cầu)
     if (streak >= 3 && streak <= 5) {
-        return { res: lastResult, conf: '80%', log: `ĐU CẦU BỆT ${streak} TAY` };
-    }
-    // Nếu bệt quá dài (>7 tay): Cảnh báo bẻ cầu
-    if (streak >= 6) {
-        return { res: lastResult === 'Tài' ? 'Xỉu' : 'Tài', conf: '65%', log: `CẦU QUÁ DÀI (${streak}) - CÂN NHẮC BẺ` };
+        return { res: lastResult, conf: '88%', log: 'THEO BỆT TAY ' + (streak + 1) };
     }
 
-    // --- BƯỚC 2: BIỂU QUYẾT TRỌNG SỐ ---
+    // Biểu quyết từ các thuật toán
     let votes = { T: 0, X: 0 };
-    const weights = { markov: 3, frequency: 2, bayesian: 2, cnn_simple: 1, logistic: 1 };
+    const pMarkov = Algos.markovChain(history);
+    const pFreq = Algos.frequency(history);
+    const pTrend = Algos.trendFollow(history);
 
-    Object.keys(Algos).forEach(name => {
-        const p = Algos[name](history);
-        if (p === 'T') votes.T += weights[name];
-        else if (p === 'X') votes.X += weights[name];
-    });
+    if (pMarkov === 'T') votes.T += 2; else if (pMarkov === 'X') votes.X += 2;
+    if (pFreq === 'T') votes.T += 1; else if (pFreq === 'X') votes.X += 1;
+    if (pTrend === 'T') votes.T += 1; else if (pTrend === 'X') votes.X += 1;
 
-    const final = votes.T > votes.X ? 'Tài' : (votes.X > votes.T ? 'Xỉu' : lastResult);
-    const confidence = Math.min(95, 50 + (Math.abs(votes.T - votes.X) * 5));
+    if (votes.T > votes.X) return { res: 'Tài', conf: '75%', log: 'AI VOTE TÀI' };
+    if (votes.X > votes.T) return { res: 'Xỉu', conf: '75%', log: 'AI VOTE XỈU' };
 
-    return { 
-        res: final, 
-        conf: confidence + "%", 
-        log: `HỆ THỐNG TRỌNG SỐ (${votes.T}T - ${votes.X}X)` 
-    };
+    return { res: lastResult === 'Tài' ? 'Xỉu' : 'Tài', conf: '60%', log: 'ĐÁNH CẦU ĐẢO' };
 }
 
-// 6. ĐỒNG BỘ DỮ LIỆU TỰ ĐỘNG
-async function sync() {
-    for (const type of ['nohu', 'md5']) {
+// 6. LUỒNG ĐỒNG BỘ DỮ LIỆU
+async function runSync() {
+    for (const key of ['nohu', 'md5']) {
         try {
-            const res = await fetch(CONFIG.ENDPOINTS[type.toUpperCase()]);
-            const json = await res.json();
+            const response = await fetch(CONFIG.ENDPOINTS[key.toUpperCase()]);
+            const json = await response.json();
             const list = Array.isArray(json) ? json : (json.list || json.data || []);
-            const state = DATA_STORE[type];
+            const state = DATA_STORE[key];
 
-            const newHistory = list.map(item => ({
+            const cleanList = list.map(item => ({
                 session: Number(item.id || item.SessionId || 0),
-                result: MathLib.standardize(item)
+                result: Utils.standardize(item)
             })).filter(h => h.session > 0).sort((a, b) => a.session - b.session);
 
-            if (newHistory.length > 0) {
-                const newest = newHistory[newHistory.length - 1];
-                // Kiểm tra kết quả dự đoán của phiên vừa qua
-                if (state.lastPrediction && state.lastPrediction.session === newest.session) {
-                    if (!state.processedSessions.has(newest.session)) {
-                        if (state.lastPrediction.res === newest.result) state.stats.win++; else state.stats.loss++;
+            if (cleanList.length > 0) {
+                const latest = cleanList[cleanList.length - 1];
+                
+                // Đối soát thắng thua
+                if (state.lastPrediction && state.lastPrediction.session === latest.session) {
+                    if (!state.processedSessions.has(latest.session)) {
+                        if (state.lastPrediction.res === latest.result) {
+                            state.stats.win++;
+                        } else {
+                            state.stats.loss++;
+                        }
                         state.stats.total++;
-                        state.processedSessions.add(newest.session);
-                        if(state.processedSessions.size > 200) state.processedSessions.clear();
+                        state.processedSessions.add(latest.session);
                     }
                 }
-                state.history = newHistory;
+                state.history = cleanList;
             }
-        } catch (e) { console.error(`Sync error ${type}`); }
+        } catch (err) {
+            console.log('Error Syncing ' + key);
+        }
     }
 }
 
-setInterval(sync, CONFIG.SYNC_INTERVAL);
+// Khởi tạo vòng lặp
+setInterval(runSync, CONFIG.SYNC_INTERVAL);
 
-// 7. ENDPOINTS API
+// 7. API ENDPOINTS
 app.get('/api/all', (req, res) => {
-    const getResult = (type) => {
+    const buildResponse = (type) => {
         const s = DATA_STORE[type];
-        const lastSession = s.history.length > 0 ? s.history[s.history.length - 1].session : 0;
-        const pred = masterPredictor(s.history);
-        s.lastPrediction = { session: lastSession + 1, res: pred.res };
+        const lastSes = s.history.length > 0 ? s.history[s.history.length - 1].session : 0;
+        const pred = predictNext(type);
+        
+        // Ghi nhớ dự đoán cho phiên tiếp theo
+        s.lastPrediction = { session: lastSes + 1, res: pred.res };
 
         return {
-            phien_hien_tai: lastSession,
-            phien_tiep: lastSession + 1,
+            phien_hien_tai: lastSes,
+            phien_tiep: lastSes + 1,
             du_doan: pred.res,
             tin_cay: pred.conf,
             phan_tich: pred.log,
-            thong_ke: {
+            stats: {
                 win: s.stats.win,
                 loss: s.stats.loss,
-                rate: s.stats.total > 0 ? ((s.stats.win / s.stats.total) * 100).toFixed(1) + "%" : "0%"
+                rate: s.stats.total > 0 ? ((s.stats.win / s.stats.total) * 100).toFixed(1) + '%' : '0%'
             },
-            chuoi: s.history.slice(-12).map(x => x.result[0]).join(' ')
+            history_str: s.history.slice(-12).map(x => x.result[0]).join('-')
         };
     };
 
     res.json({
-        admin: CONFIG.ADMIN,
+        author: CONFIG.ADMIN,
         version: CONFIG.VERSION,
-        time: new Date().toLocaleString('vi-VN'),
-        data: { nohu: getResult('nohu'), md5: getResult('md5') }
+        server_time: new Date().toLocaleString(),
+        data: {
+            nohu: buildResponse('nohu'),
+            md5: buildResponse('md5')
+        }
     });
 });
 
-// Giao diện Web View trực tiếp
+// Giao diện người dùng (Dashboard)
 app.get('/', (req, res) => {
     res.send(`
-        <body style="background:#050505; color:#00ffcc; font-family:'Courier New', monospace; padding:20px; text-align:center;">
-            <h1 style="text-shadow: 0 0 10px #00ffcc;">🚀 TUANX3000 CORE V10.2 PRO MAX</h1>
-            <p>DỮ LIỆU TỔNG HỢP: <a href="/api/all" style="color:yellow">/api/all</a></p>
-            <hr style="border:0.5px solid #222">
-            <div style="display:flex; justify-content: space-around; flex-wrap: wrap;">
-                <div id="nohu_box" style="border:1px solid #00ffcc; padding:15px; margin:10px; min-width:300px; border-radius:10px;">
-                    <h2>NỔ HŨ</h2><div id="nohu_content">Loading...</div>
+        <body style="background:#0a0a0a; color:#00ff00; font-family:monospace; text-align:center; padding-top:50px;">
+            <h1 style="color:#00ffcc; text-shadow:0 0 10px #00ffcc;">🚀 TUANX3000 CORE V10.3 ALL-IN-ONE</h1>
+            <p>API: <a href="/api/all" style="color:#fff;">/api/all</a></p>
+            <div style="display:flex; justify-content:center; gap:20px; flex-wrap:wrap; margin-top:30px;">
+                <div style="border:2px solid #00ffcc; padding:20px; width:350px; border-radius:15px; background:#111;">
+                    <h2 style="color:#00ffcc;">TÀI XỈU NỔ HŨ</h2>
+                    <div id="nohu_ui">Loading...</div>
                 </div>
-                <div id="md5_box" style="border:1px solid #ff00ff; padding:15px; margin:10px; min-width:300px; border-radius:10px; color:#ff00ff;">
-                    <h2 style="color:#ff00ff;">MD5</h2><div id="md5_content">Loading...</div>
+                <div style="border:2px solid #ff00ff; padding:20px; width:350px; border-radius:15px; background:#111;">
+                    <h2 style="color:#ff00ff;">TÀI XỈU MD5</h2>
+                    <div id="md5_ui">Loading...</div>
                 </div>
             </div>
             <script>
-                async function load() {
-                    const res = await fetch('/api/all');
-                    const d = await res.json();
-                    const nh = d.data.nohu;
-                    const m = d.data.md5;
-                    
-                    document.getElementById('nohu_content').innerHTML = \`
-                        <h1 style="font-size:40px; margin:10px 0;">\${nh.du_doan}</h1>
-                        <p>Độ tin cậy: <b>\${nh.tin_cay}</b></p>
-                        <p>Lịch sử: \${nh.chuoi}</p>
-                        <p style="color:#fff">Win: \${nh.thong_ke.win} | Loss: \${nh.thong_ke.win} | Rate: \${nh.thong_ke.rate}</p>
-                    \`;
-                    document.getElementById('md5_content').innerHTML = \`
-                        <h1 style="font-size:40px; margin:10px 0;">\${m.du_doan}</h1>
-                        <p>Độ tin cậy: <b>\${m.tin_cay}</b></p>
-                        <p>Lịch sử: \${m.chuoi}</p>
-                        <p style="color:#fff">Win: \${m.thong_ke.win} | Loss: \${m.thong_ke.win} | Rate: \${m.thong_ke.rate}</p>
-                    \`;
+                async function fetchFullData() {
+                    try {
+                        const r = await fetch('/api/all');
+                        const d = await r.json();
+                        
+                        const render = (target, item, color) => {
+                            document.getElementById(target).innerHTML = ' \
+                                <h1 style="font-size:50px; color:'+color+'; margin:10px 0;">'+item.du_doan+'</h1> \
+                                <p>Độ tin cậy: <b>'+item.tin_cay+'</b></p> \
+                                <p>Logic: <i>'+item.phan_tich+'</i></p> \
+                                <p>Cầu: '+item.history_str+'</p> \
+                                <p style="border-top:1px solid #333; padding-top:10px;">Thắng: '+item.stats.win+' | Thua: '+item.stats.loss+' | Tỷ lệ: '+item.stats.rate+'</p> \
+                            ';
+                        };
+                        
+                        render('nohu_ui', d.data.nohu, '#00ffcc');
+                        render('md5_ui', d.data.md5, '#ff00ff');
+                    } catch(e) {}
                 }
-                setInterval(load, 2500);
+                setInterval(fetchFullData, 2000);
+                fetchFullData();
             </script>
         </body>
     `);
 });
 
+// Chạy Server
 app.listen(PORT, () => {
-    console.log(\`[TUANX3000 V10.2] Server is running on port \${PORT}\`);
-    sync();
+    console.log('--- SYSTEM ONLINE ---');
+    console.log('Admin: ' + CONFIG.ADMIN);
+    console.log('Port: ' + PORT);
+    runSync();
 });
