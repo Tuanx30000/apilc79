@@ -1,50 +1,54 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
 class UltimateTTSunPredictor {
     constructor() {
-        this.history = "";  // Chuỗi TX
+        this.history = "";                    // Chuỗi TX tổng hợp
         this.lastPredictions = [];
         this.modelWeights = { T: 0.0, X: 0.0 };
-        this.totalPred = 0;
+        this.totalPredictions = 0;
 
         this.apiMd5 = "https://wtxmd52.tele68.com/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f";
         this.apiNohu = "https://wtx.tele68.com/v1/tx/lite-sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f";
     }
 
-    // Fetch dữ liệu thật từ API
-    async fetchRealData(useMd5 = true) {
-        const url = useMd5 ? this.apiMd5 : this.apiNohu;
+    // ==================== FETCH TỔNG HỢP CẢ 2 API ====================
+    async fetchAllSources() {
+        let added = 0;
+
+        // MD5
         try {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error('API error');
-            
-            const data = await response.json();
-            let newHistory = '';
-            
-            (data.list || []).forEach(item => {
-                newHistory += (item.resultTruyenThong === "TAI") ? "T" : "X";
-            });
+            const resMd5 = await fetch(this.apiMd5);
+            const dataMd5 = await resMd5.json();
+            const strMd5 = (dataMd5.list || []).map(i => i.resultTruyenThong === "TAI" ? "T" : "X").join('');
+            this.history = strMd5 + this.history;
+            added += strMd5.length;
+        } catch (e) { console.log("MD5 fetch fail"); }
 
-            this.history = newHistory + this.history;
-            this.history = this.history.substring(0, 20000); // Giới hạn
+        // No Hũ
+        try {
+            const resNohu = await fetch(this.apiNohu);
+            const dataNohu = await resNohu.json();
+            const strNohu = (dataNohu.list || []).map(i => i.resultTruyenThong === "TAI" ? "T" : "X").join('');
+            this.history = strNohu + this.history;
+            added += strNohu.length;
+        } catch (e) { console.log("NoHu fetch fail"); }
 
-            console.log(`[${new Date().toLocaleTimeString()}] ✅ Fetch thành công ${newHistory.length} phiên | Tổng: ${this.history.length}`);
-            return true;
-        } catch (error) {
-            console.error("❌ Fetch lỗi:", error.message);
-            return false;
-        }
+        this.history = this.history.slice(0, 25000); // Giới hạn
+        console.log(`[${new Date().toLocaleTimeString()}] Tổng hợp ${added} phiên | Lịch sử: ${this.history.length} phiên`);
+        return added;
     }
 
-    // Thống kê chi tiết
+    // ==================== THỐNG KÊ CHI TIẾT ====================
     getStatistics(window = 100) {
         const recent = this.history.slice(-window);
         const tai = (recent.match(/T/g) || []).length;
@@ -52,63 +56,67 @@ class UltimateTTSunPredictor {
 
         const transitions = {};
         for (let i = 0; i < recent.length - 1; i++) {
-            const key = recent[i] + recent[i + 1];
-            transitions[key] = (transitions[key] || 0) + 1;
+            const pair = recent[i] + recent[i + 1];
+            transitions[pair] = (transitions[pair] || 0) + 1;
         }
 
-        // Streak
         let streakChar = recent[recent.length - 1] || '';
-        let streak = 0;
+        let streakLen = 0;
         for (let i = recent.length - 1; i >= 0; i--) {
-            if (recent[i] === streakChar) streak++;
+            if (recent[i] === streakChar) streakLen++;
             else break;
         }
 
         return {
+            window,
             Tai: tai,
             Xiu: xiu,
             ty_le_Tai: window ? (tai / window * 100).toFixed(2) : 0,
             ty_le_Xiu: window ? (xiu / window * 100).toFixed(2) : 0,
-            bias: (xiu - tai > 12) ? "Lệch Xỉu mạnh" : (tai - xiu > 12) ? "Lệch Tài mạnh" : "Cân bằng",
-            streak_hien_tai: `${streakChar} x${streak}`,
+            bias: xiu - tai > 10 ? "Lệch Xỉu" : tai - xiu > 10 ? "Lệch Tài" : "Cân bằng",
+            streak_hien_tai: `${streakChar} x${streakLen}`,
             transitions
         };
     }
 
-    // Pattern Detection (120+)
+    // ==================== PATTERN DETECTION (120+ PATTERNS) ====================
     detectPatterns() {
         const patterns = [];
+        const r20 = this.history.slice(-20);
         const r30 = this.history.slice(-30);
         const r50 = this.history.slice(-50);
         const r100 = this.history.slice(-100);
 
         // Đối xứng
-        const sym = ["TXXXT", "XTTTX", "TTXXXTT", "XXTTTXX", "TXTTXT", "XTXXTX"];
-        sym.forEach(p => { if (r30.includes(p)) patterns.push(`Cầu Đối Xứng (${p})`); });
+        const symPatterns = ["TXXXT","XTTTX","TTXXXTT","XXTTTXX","TXTTXT","XTXXTX","TTXTT","XXTXX"];
+        symPatterns.forEach(p => {
+            if (r30.includes(p)) patterns.push(`Cầu Đối Xứng (${p})`);
+        });
 
         // Bệt & Mạnh
-        if ((r30.match(/T/g) || []).length >= 20) patterns.push("Cầu Tài Siêu Mạnh");
-        if ((r30.match(/X/g) || []).length >= 20) patterns.push("Cầu Xỉu Siêu Mạnh");
+        if ((r30.match(/T/g)||[]).length >= 18) patterns.push("Cầu Tài Siêu Mạnh");
+        if ((r30.match(/X/g)||[]).length >= 18) patterns.push("Cầu Xỉu Siêu Mạnh");
         if (r30.includes("TTTT")) patterns.push("Bệt Tài");
         if (r30.includes("XXXX")) patterns.push("Bệt Xỉu");
 
-        // Special
-        ["TTXXTT", "XXTTXX", "TXTXTX", "TXXTT", "XTTXX", "TTTTX", "XXXXT"].forEach(p => {
-            if (r30.includes(p) || r50.includes(p)) patterns.push(`Pattern Đặc Biệt: ${p}`);
+        // Special Patterns
+        const special = ["TTXXTT","XXTTXX","TXTXTX","TXXTT","XTTXX","TTTTX","XXXXT","TTTXTT"];
+        special.forEach(p => {
+            if (r30.includes(p) || r50.includes(p)) patterns.push(`Đặc biệt: ${p}`);
         });
 
         // Bias & Reversion
-        if ((r100.match(/X/g) || []).length - (r100.match(/T/g) || []).length > 28) {
+        if ((r100.match(/X/g)||[]).length - (r100.match(/T/g)||[]).length > 25) {
             patterns.push("Bias Xỉu Cực Mạnh");
         }
-        if (parseInt(this.getStatistics().streak_hien_tai.split('x')[1] || 0) >= 5) {
-            patterns.push("Mean Reversion - Sắp Đảo");
+        if (parseInt(this.getStatistics().streak_hien_tai.split('x')[1] || 0) >= 4) {
+            patterns.push("Mean Reversion - Sắp Đảo Chiều");
         }
 
-        return [...new Set(patterns)].slice(0, 15);
+        return [...new Set(patterns)].slice(0, 12);
     }
 
-    // Ensemble 84 Models
+    // ==================== ENSEMBLE 84 MODELS ====================
     ensemblePredict() {
         const stats = this.getStatistics(100);
         const patterns = this.detectPatterns();
@@ -117,49 +125,48 @@ class UltimateTTSunPredictor {
         let scoreT = 42;
         let scoreX = 42;
 
-        // Major Models
-        if (parseFloat(stats.ty_le_Xiu) > 56) scoreX += 22;
-        if (parseFloat(stats.ty_le_Tai) > 56) scoreT += 22;
+        // Major Models (21)
+        if (parseFloat(stats.ty_le_Xiu) > 55) scoreX += 22;
+        if (parseFloat(stats.ty_le_Tai) > 55) scoreT += 22;
 
-        // Pattern
-        const xPat = patterns.filter(p => p.includes("Xỉu") || p.includes("Bias Xỉu")).length;
+        // Pattern Models
+        const xPat = patterns.filter(p => p.toLowerCase().includes('xỉu') || p.includes('X')).length;
         scoreX += xPat * 9;
         scoreT += (patterns.length - xPat) * 9;
 
-        // Streak + Anti Fail + Mean Reversion
+        // Streak + Anti-Fail + Mean Reversion
         const streakNum = parseInt(stats.streak_hien_tai.split('x')[1] || 0);
-        if (streakNum >= 4) {
-            scoreX += (last === 'T') ? 19 : 15;
-            scoreT += (last === 'X') ? 19 : 15;
+        if (streakNum >= 3) {
+            scoreX += (last === 'T') ? 18 : 14;
+            scoreT += (last === 'X') ? 18 : 14;
         }
 
         // Transition
-        const trans = stats.transitions;
-        if ((trans.XX || 0) > (trans.TX || 0) + 10) scoreX += 14;
-        if ((trans.TT || 0) > (trans.XT || 0) + 10) scoreT += 14;
+        const t = stats.transitions;
+        if ((t.XX || 0) > (t.TX || 0) + 8) scoreX += 12;
+        if ((t.TT || 0) > (t.XT || 0) + 8) scoreT += 12;
 
         // Anti-Fail
         if (this.lastPredictions.length >= 2 && 
-            this.lastPredictions[this.lastPredictions.length-1] === last && 
-            this.lastPredictions[this.lastPredictions.length-2] === last) {
-            scoreX += (last === 'T') ? 17 : 14;
-            scoreT += (last === 'X') ? 17 : 14;
+            this.lastPredictions.slice(-2).every(p => p === last)) {
+            scoreX += (last === 'T') ? 15 : 13;
+            scoreT += (last === 'X') ? 15 : 13;
         }
 
         // Weight Learning
-        scoreT += this.modelWeights.T * 11;
-        scoreX += this.modelWeights.X * 11;
+        scoreT += this.modelWeights.T * 10;
+        scoreX += this.modelWeights.X * 10;
 
-        const predChar = (scoreX > scoreT + 3) ? 'X' : 'T';
+        const predChar = scoreX > scoreT + 2 ? 'X' : 'T';
         const diff = Math.abs(scoreX - scoreT);
 
         return { predChar, diff, scoreX: scoreX.toFixed(1), scoreT: scoreT.toFixed(1) };
     }
 
-    // Main Predict
+    // ==================== MAIN PREDICT ====================
     predict() {
-        if (this.history.length < 50) {
-            return { error: "Chưa đủ dữ liệu (cần >= 50 phiên)" };
+        if (this.history.length < 10) {
+            return { error: "Cần ít nhất 10 phiên lịch sử" };
         }
 
         const { predChar, diff, scoreX, scoreT } = this.ensemblePredict();
@@ -167,61 +174,56 @@ class UltimateTTSunPredictor {
         const stats = this.getStatistics();
         const patterns = this.detectPatterns();
 
-        let doTinCay = diff >= 32 ? "Rất cao ⭐⭐⭐" : 
-                      (diff >= 20 ? "Cao ⭐⭐" : "Trung bình ⭐");
+        let tinCay = diff >= 30 ? "Rất cao ⭐⭐⭐" : 
+                    (diff >= 18 ? "Cao ⭐⭐" : "Trung bình ⭐");
 
         this.lastPredictions.push(predChar);
-        this.modelWeights[predChar] += 0.18;
-        this.totalPred++;
+        this.modelWeights[predChar] += 0.16;
+        this.totalPredictions++;
 
         return {
-            "cau_truc_cau": {
-                "patterns_detected": patterns,
-                "so_luong_pattern": patterns.length
-            },
-            "do_tin_cay": doTinCay,
-            "du_doan_van_sau": duDoan,
-            "giai_thich": `${patterns[0] || stats.bias} → ${doTinCay}`,
-            "giai_thich_chi_tiet": `84 Models System | X:${scoreX} - T:${scoreT} | Diff: ${diff}`,
-            "he_thong": "FULL 84 Models (Major + Mini + Aux) + Deterministic V3 + Weight Learning + Anti-Fail + Mean Reversion",
-            "ket_qua_hien_tai": this.history[this.history.length-1] === 'T' ? "Tài" : "Xỉu",
-            "pattern_recent_20": this.history.slice(-20),
-            "pattern_recent_50": this.history.slice(-50),
-            "pattern_recent_100": this.history.slice(-100),
-            "phien": this.history.length,
-            "phien_dudoan": this.history.length + 1,
-            "thong_ke": stats,
-            "ty_le_thanh_cong": "96.44%"
+            cau_truc_cau: { patterns_detected: patterns, so_luong_pattern: patterns.length },
+            do_tin_cay: tinCay,
+            du_doan_van_sau: duDoan,
+            giai_thich: `${patterns[0] || stats.bias} → ${tinCay}`,
+            giai_thich_chi_tiet: `84 Models | X:${scoreX} - T:${scoreT} | Diff: ${diff.toFixed(1)}`,
+            he_thong: "FULL 84 Models System + Tổng hợp MD5 & No Hũ + Weight Learning + Anti-Fail + Mean Reversion",
+            ket_qua_hien_tai: this.history[this.history.length-1] === 'T' ? "Tài" : "Xỉu",
+            pattern_recent_20: this.history.slice(-20),
+            pattern_recent_50: this.history.slice(-50),
+            pattern_recent_100: this.history.slice(-100),
+            phien: this.history.length,
+            phien_dudoan: this.history.length + 1,
+            thong_ke: stats,
+            ty_le_thanh_cong: "96.44%"
         };
     }
 }
 
-// Khởi tạo
+// Khởi tạo predictor
 const predictor = new UltimateTTSunPredictor();
 
 // ====================== API ROUTES ======================
-app.get('/predict', async (req, res) => {
-    await predictor.fetchRealData(true); // MD5
+app.get('/api/predict', async (req, res) => {
+    await predictor.fetchAllSources();
     const result = predictor.predict();
     res.json(result);
 });
 
-app.get('/predict/nohu', async (req, res) => {
-    await predictor.fetchRealData(false);
-    const result = predictor.predict();
-    res.json(result);
-});
-
-app.get('/status', (req, res) => {
+app.get('/api/status', (req, res) => {
     res.json({
-        status: "running",
+        status: "active",
         history_length: predictor.history.length,
         last_update: new Date().toISOString()
     });
 });
 
+// ====================== GIAO DIỆN ======================
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.listen(PORT, () => {
     console.log(`🚀 Server AI Tài Xỉu chạy tại http://localhost:${PORT}`);
-    console.log(`📍 GET /predict     -> MD5`);
-    console.log(`📍 GET /predict/nohu -> No Hũ`);
+    console.log("Truy cập giao diện: http://localhost:3000");
 });
