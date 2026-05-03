@@ -1,3 +1,10 @@
+/**
+ * LC79 MASTER TOOL V14.1 OMNI - GODLIKE ENGINE
+ * OS: iOS/Android/Linux (Node.js Optimized)
+ * Developer: AnhTuấnMMO
+ * Focus: MD5 & Jackpot Analysis
+ */
+
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
@@ -8,183 +15,203 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Cấu hình Nguồn cấp dữ liệu nâng cao
-const API_LINKS = {
-    MD5: "https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f",
-    SUN: "https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f"
+// Cấu hình mã màu Neon Cyber-tech
+const COLORS = {
+    GREEN: "\x1b[38;2;0;255;65m", // Neon Green #00ff41[span_3](start_span)[span_3](end_span)
+    CYAN: "\x1b[36m",
+    RED: "\x1b[31m",
+    RESET: "\x1b[0m",
+    BOLD: "\x1b[1m"
 };
 
-class TUANX3000_GODLIKE_ENGINE {
+// 1. ENGINE TRUNG TÂM - TÍCH HỢP 5 THUẬT TOÁN
+class TuanX3000_Godlike_Engine {
     constructor() {
-        this.fullHistory = { MD5: [], SUN: [] };
-        this.weights = {}; // Hệ thống tự học (Adaptive Weights)
-        this.initAlgorithms();
+        this.history = [];
+        this.weights = {
+            markov: 1.8,    // Ưu tiên cao cho MD5[span_4](start_span)[span_4](end_span)
+            cnn: 1.5,       // Nhận diện đà điểm số[span_5](start_span)[span_5](end_span)
+            chaos: 1.2,     // Chốt chặn rủi ro[span_6](start_span)[span_6](end_span)
+            cycle: 1.4,     // Bắt nhịp cầu đối xứng[span_7](start_span)[span_7](end_span)
+            pattern: 1.0    // Logic cầu cơ bản
+        };
+        this.md5_api = "https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=104c423fe086f7aeb82ec6ba0e91672f";
     }
 
-    initAlgorithms() {
-        // Khởi tạo trọng số cho các nhóm thuật toán
-        this.algoGroups = ['Markov', 'Pattern', 'ML_Sim', 'Quantum_Chaos', 'Statistical'];
-        this.algoGroups.forEach(group => this.weights[group] = 1.0);
-    }
-
-    async fetchData(type) {
+    // --- LẤY DỮ LIỆU THỰC THỜI ---
+    async refreshData() {
         try {
-            const res = await fetch(API_LINKS[type]);
-            const json = await res.json();
-            if (!json.list) return [];
-            return json.list.map(i => ({
-                id: i.id,
-                dices: i.dices,
-                point: i.point,
-                tx: i.point >= 11 ? 'T' : 'X'
-            })).sort((a, b) => a.id - b.id);
-        } catch (e) {
-            console.error(`\x1b[31m[LỖI] Connection Fail: ${type}\x1b[0m`);
-            return [];
+            const response = await fetch(this.md5_api);
+            const json = await response.json();
+            if (json && json.list) {
+                this.history = json.list.map(item => ({
+                    id: item.id,
+                    dices: item.dices,
+                    point: item.point,
+                    tx: item.point >= 11 ? 'T' : 'X'
+                })).sort((a, b) => a.id - b.id);
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.log(`${COLORS.RED}[ERROR] Không thể kết nối API MD5${COLORS.RESET}`);
+            return false;
         }
     }
 
-    // --- NHÓM 1: MARKOV & N-GRAM SIÊU CẤP ---
-    analyzeHyperMarkov(history) {
-        if (history.length < 20) return null;
-        const tx = history.map(h => h.tx);
+    // --- THUẬT TOÁN 1: MARKOV CHAIN N-GRAM ---
+    // Phân tích xác suất chuyển trạng thái dựa trên chuỗi N phiên[span_8](start_span)[span_8](end_span)
+    analyzeMarkov() {
+        const txArr = this.history.map(h => h.tx);
+        if (txArr.length < 15) return null;
+
         let votes = { T: 0, X: 0 };
-        
-        [3, 4, 5].forEach(order => {
-            const lastKey = tx.slice(-order).join('');
+        const orders = [3, 4, 5]; // Kiểm tra đa tầng
+
+        orders.forEach(order => {
+            const currentPattern = txArr.slice(-order).join('');
             let counts = { T: 0, X: 0 };
-            for (let i = 0; i < tx.length - order; i++) {
-                if (tx.slice(i, i + order).join('') === lastKey) {
-                    counts[tx[i + order]]++;
+
+            for (let i = 0; i < txArr.length - order; i++) {
+                if (txArr.slice(i, i + order).join('') === currentPattern) {
+                    const nextResult = txArr[i + order];
+                    if (nextResult) counts[nextResult]++;
                 }
             }
-            if (counts.T > counts.X) votes.T += order;
-            else if (counts.X > counts.T) votes.X += order;
-        });
-        return votes.T > votes.X ? 'T' : 'X';
-    }
-
-    // --- NHÓM 2: MÔ PHỎNG HỌC MÁY (CNN & LOGISTIC) ---
-    analyzeMLSim(history) {
-        if (history.length < 30) return null;
-        const points = history.map(h => h.point);
-        const lastPoints = points.slice(-5);
-        
-        // Kernel giả lập tích chập (CNN)
-        const weights = [0.4, 0.3, 0.2, 0.1, 0.05];
-        let trendScore = 0;
-        lastPoints.forEach((p, i) => {
-            trendScore += (p - 10.5) * weights[i];
+            
+            if (counts.T > counts.X) votes.T += (order * 0.5);
+            else if (counts.X > counts.T) votes.X += (order * 0.5);
         });
 
-        // Logistic sigmoid giả lập
-        const probT = 1 / (1 + Math.exp(trendScore));
-        return probT > 0.5 ? 'T' : 'X';
+        return votes.T > votes.X ? 'T' : (votes.X > votes.T ? 'X' : null);
     }
 
-    // --- NHÓM 3: LÝ THUYẾT HỖN LOẠN (CHAOS & ENTROPY) ---
-    analyzeChaosTheory(history) {
-        if (history.length < 40) return null;
-        const tx = history.map(h => h.tx);
+    // --- THUẬT TOÁN 2: CNN POINT TREND (MÔ PHỎNG TÍCH CHẬP) ---
+    // Sử dụng đà (Momentum) của tổng điểm xúc xắc để dự báo[span_9](start_span)[span_9](end_span)
+    analyzeCNNTrend() {
+        const points = this.history.map(h => h.point);
+        if (points.length < 10) return null;
+
+        const lastFive = points.slice(-5);
+        const kernels = [0.4, 0.3, 0.15, 0.1, 0.05]; // Trọng số phiên gần nhất cao nhất
         
-        // Tính Entropy (Độ nhiễu)
-        const freq = { T: 0, X: 0 };
-        tx.slice(-20).forEach(v => freq[v]++);
-        const pT = freq.T / 20;
-        const pX = freq.X / 20;
-        const entropy = -(pT * Math.log2(pT || 1) + pX * Math.log2(pX || 1));
+        // Tính toán Momentum: S = Σ(Point - 10.5) * Weight
+        let momentum = 0;
+        lastFive.forEach((p, i) => {
+            momentum += (p - 10.5) * kernels[i];
+        });
 
-        // Nếu entropy quá cao (loạn), đánh theo cầu lặp
-        if (entropy > 0.9) return tx[tx.length - 1];
-        // Nếu entropy thấp (đang ổn định), đánh bẻ cầu
-        return tx[tx.length - 1] === 'T' ? 'X' : 'T';
+        return momentum > 0 ? 'T' : 'X';
     }
 
-    // --- NHÓM 4: PHÂN TÍCH CHU KỲ (CYCLE ANALYSIS) ---
-    analyzeCycle(history) {
-        if (history.length < 50) return null;
-        const tx = history.map(h => h.tx);
-        for (let len = 2; len <= 10; len++) {
-            const segment1 = tx.slice(-len).join('');
-            const segment2 = tx.slice(-len * 2, -len).join('');
-            if (segment1 === segment2) return tx[tx.length - len]; // Bắt cầu đối xứng
+    // --- THUẬT TOÁN 3: SHANNON ENTROPY (ĐỘ NHIỄU) ---
+    // Kiểm tra xem bàn đang ổn định hay loạn để giảm rủi ro[span_10](start_span)[span_10](end_span)
+    calculateEntropy() {
+        const last20 = this.history.slice(-20).map(h => h.tx);
+        const countT = last20.filter(x => x === 'T').length;
+        const pT = countT / 20;
+        const pX = 1 - pT;
+
+        if (pT === 0 || pX === 0) return 0;
+        // Công thức: H(x) = -Σ p(i)log2(p(i))
+        const entropy = -(pT * Math.log2(pT) + pX * Math.log2(pX));
+        return entropy;
+    }
+
+    // --- THUẬT TOÁN 4: CYCLE SYMMETRY (CHU KỲ ĐỐI XỨNG) ---
+    // Tìm kiếm các mẫu cầu đối xứng gương[span_11](start_span)[span_11](end_span)
+    analyzeCycle() {
+        const txArr = this.history.map(h => h.tx).slice(-10);
+        const pattern = txArr.join('');
+        
+        // Ví dụ: TXT - TXT (Lặp) hoặc TXT - TXT (Đối xứng)
+        if (pattern.slice(-3) === pattern.slice(-6, -3)) {
+            return txArr[txArr.length - 1]; // Đánh theo cầu lặp
         }
         return null;
     }
 
-    // --- SIÊU TỔ HỢP (META-ENSEMBLE) ---
-    getEnsemble(history) {
-        const results = {
-            Markov: this.analyzeHyperMarkov(history),
-            ML_Sim: this.analyzeMLSim(history),
-            Chaos: this.analyzeChaosTheory(history),
-            Cycle: this.analyzeCycle(history),
-            Pattern: history.map(h => h.tx).slice(-1)[0] === 'T' ? 'X' : 'T' // Bridge logic
-        };
-
-        let scoreT = 0, scoreX = 0;
-        Object.keys(results).forEach(key => {
-            if (results[key] === 'T') scoreT += (this.weights[key] || 1);
-            if (results[key] === 'X') scoreX += (this.weights[key] || 1);
-        });
-
-        const total = scoreT + scoreX;
-        const confidence = (Math.max(scoreT, scoreX) / total * 100).toFixed(0);
-        
-        return {
-            prediction: scoreT > scoreX ? "Tài" : "Xỉu",
-            confidence: `${confidence}%`,
-            details: results
-        };
+    // --- THUẬT TOÁN 5: JACKPOT DETECTOR (SĂN NỔ HŨ) ---
+    // Nhận diện biến động điểm số cực đại báo hiệu nhịp Jackpot[span_12](start_span)[span_12](end_span)
+    detectJackpot() {
+        const lastPoints = this.history.slice(-3).map(h => h.point);
+        // Nhịp báo: Điểm số bám biên liên tục (Sát 3 hoặc 18)
+        const isExtremity = lastPoints.some(p => p <= 5 || p >= 16);
+        return isExtremity ? "HIGH_CHANCE" : "NORMAL";
     }
 
-    async processAll() {
-        const types = ['MD5', 'SUN'];
-        const results = {};
+    // --- TỔNG HỢP KẾT QUẢ (BAYESIAN ENSEMBLE) ---
+    generateFinalPrediction() {
+        const results = {
+            markov: this.analyzeMarkov(),
+            cnn: this.analyzeCNNTrend(),
+            cycle: this.analyzeCycle()
+        };
 
-        for (const type of types) {
-            const data = await this.fetchData(type);
-            if (data.length > 0) {
-                this.fullHistory[type] = data;
-                const ensemble = this.getEnsemble(data);
-                const last = data[data.length - 1];
+        let scoreT = 0;
+        let scoreX = 0;
 
-                results[type] = {
-                    "phien_id": last.id + 1,
-                    "ket_qua_truoc": `${last.dices.join(',')} (${last.tx})`,
-                    "du_doan": ensemble.prediction,
-                    "do_tin_cay": ensemble.confidence,
-                    "thuat_toan_chay": Object.keys(ensemble.details).length,
-                    "trang_thai": parseFloat(ensemble.confidence) > 70 ? "⚡ CỰC ĐẸP" : "⚖️ CÂN NHẮC"
-                };
-            }
+        // Cộng dồn điểm tin cậy dựa trên trọng số[span_13](start_span)[span_13](end_span)
+        for (const [algo, result] of Object.entries(results)) {
+            if (result === 'T') scoreT += this.weights[algo];
+            if (result === 'X') scoreX += this.weights[algo];
         }
 
+        const totalScore = scoreT + scoreX;
+        const confidence = ((Math.max(scoreT, scoreX) / totalScore) * 100).toFixed(1);
+        const finalVote = scoreT > scoreX ? "TÀI" : "XỈU";
+        
+        // Kiểm soát độ nhiễu
+        const entropy = this.calculateEntropy();
+        const status = (entropy > 0.95) ? "⏳ ĐANG LOẠN - CHỜ" : (confidence > 75 ? "🔥 CỰC ĐẸP - VÀO" : "⚖️ CÂN NHẮC");
+
         return {
-            "master_tool": "LC79 MASTER TOOL V14.0 OMNI",
-            "admin": "AnhTuấnMMO",
-            "timestamp": new Date().toLocaleString(),
-            "data": results
+            prediction: finalVote,
+            confidence: confidence + "%",
+            entropy: entropy.toFixed(3),
+            jackpot: this.detectJackpot(),
+            status: status
         };
     }
 }
 
-const engine = new TUANX3000_GODLIKE_ENGINE();
+const engine = new TuanX3000_Godlike_Engine();
 
-// Routes
-app.get('/api/v1/predict', async (req, res) => {
-    const result = await engine.processAll();
-    res.json(result);
+// 2. API ENDPOINTS
+app.get('/api/predict/md5', async (req, res) => {
+    const success = await engine.refreshData();
+    if (!success) return res.status(500).json({ error: "Lỗi kết nối máy chủ MD5" });
+
+    const analysis = engine.generateFinalPrediction();
+    const lastSession = engine.history[engine.history.length - 1];
+
+    res.json({
+        author: "AnhTuấnMMO",
+        tool: "LC79 Master v14.1",
+        target: "MD5 & NỔ HŨ",
+        session_info: {
+            current_id: lastSession.id,
+            next_id: lastSession.id + 1,
+            last_result: `${lastSession.dices.join('-')} (${lastSession.tx})`
+        },
+        analysis: analysis,
+        timestamp: new Date().toISOString()
+    });
 });
 
+// 3. KHỞI CHẠY SERVER
 app.listen(PORT, () => {
-    console.log(`\x1b[32m
-    ╔══════════════════════════════════════════════════╗
-    ║        LC79 MASTER TOOL V14.0 - GODLIKE          ║
-    ║   Admin: AnhTuấnMMO | Style: Neon Cyber Green    ║
-    ╚══════════════════════════════════════════════════╝
-    [+] Cổng API: http://localhost:${PORT}/api/v1/predict
-    [+] Tích hợp: CNN, Markov v5, Chaos Theory, Entropy
-    [+] Hệ thống: Sẵn sàng quét MD5 & SUN Nổ Hũ
-    \x1b[0m`);
+    console.clear();
+    console.log(`${COLORS.GREEN}${COLORS.BOLD}`);
+    console.log(`    ██╗     ██████╗███████╗ █████╗     ███╗   ███╗ █████╗ ███████╗████████╗███████╗██████╗ `);
+    console.log(`    ██║    ██╔════╝╚════██║██╔══██╗    ████╗ ████║██╔══██╗██╔════╝╚══██╔══╝██╔════╝██╔══██╗`);
+    console.log(`    ██║    ██║         ██╔╝╚██████║    ██╔████╔██║███████║███████╗   ██║   █████╗  ██████╔╝`);
+    console.log(`    ██║    ██║        ██╔╝  ╚═══██║    ██║╚██╔╝██║██╔══██║╚════██║   ██║   ██╔══╝  ██╔══██╗`);
+    console.log(`    ███████╗╚██████╗  ██║   █████╔╝    ██║ ╚═╝ ██║██║  ██║███████║   ██║   ███████╗██║  ██║`);
+    console.log(`    ╚══════╝ ╚═════╝  ╚═╝   ╚════╝     ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝`);
+    console.log(`\n                  --- VERSION 14.1 OMNI | ADMIN: ANHTUẤNMMO ---`);
+    console.log(`\n[+] Chế độ: CHỈ QUÉT MD5 & NỔ HŨ (Đã gỡ bỏ SUN)`);
+    console.log(`[+] Kiến trúc: Godlike Engine (Markov, CNN, Entropy, Cycle, Bayesian)`);
+    console.log(`[+] API Endpoint: http://localhost:${PORT}/api/predict/md5`);
+    console.log(`[+] Trạng thái: ${COLORS.CYAN}SẴN SÀNG CHIẾN ĐẤU!${COLORS.RESET}\n`);
 });
