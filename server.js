@@ -1,4 +1,4 @@
-Dò soát code có đầy đủ // server.js - PHIÊN BẢN TỐI ƯU V2.2.0 
+// server.js - PHIÊN BẢN TỐI ƯU V2.2.0 
 // Bản quyền: tuanx3000 - Tổng hợp dữ liệu Tài Xỉu từ đa nguồn (MD5 & NOHU)
 
 const express = require('express');
