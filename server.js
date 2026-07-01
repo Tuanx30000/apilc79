@@ -236,26 +236,40 @@ async function refreshAll() {
         console.error(`[tuanx3000] ❌ Lỗi refreshAll: ${error.message}`);
     }
 }
+
 // ==================== ROUTES ====================
 app.get('/', (req, res) => {
+    res.json({ brand: BRAND.name, version: BRAND.version, status: 'API Đang Chạy' });
+});
+
+app.get('/health', (req, res) => {
     res.json({
-        brand: BRAND.name,
-        version: BRAND.version,
-        description: 'API tổng hợp kết quả Tài Xỉu từ MD5 và NOHU',
-        endpoints: {
-            '/': 'Hướng dẫn này',
-            '/health': 'Kiểm tra trạng thái server và các nguồn',
-            '/api/latest': 'Lấy phiên mới nhất tổng hợp (JSON)',
-            '/api/history': 'Lấy lịch sử tổng hợp (hỗ trợ tham số ?limit=N, mặc định 50, tối đa 500)',
-            '/api/source/:name': 'Lấy lịch sử riêng nguồn (MD5 hoặc NOHU), hỗ trợ ?limit=N'
-        },
-        examples: {
-            latest: '/api/latest',
-            history_10: '/api/history?limit=10',
-            source_MD5_20: '/api/source/MD5?limit=20'
-        },
-        note: 'Tất cả endpoint đều dùng GET, trả về JSON. Rate limit: 100 request/phút/IP.'
+        status: 'ok',
+        MD5: { records: dataStore.MD5.history.length, latest: dataStore.MD5.latest.Phien },
+        NOHU: { records: dataStore.NOHU.history.length, latest: dataStore.NOHU.latest.Phien },
+        Tổng_hợp: aggregatedHistory.length
     });
+});
+
+app.get('/api/latest', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.json(aggregatedLatest);
+});
+
+app.get('/api/history', (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.json({ brand: BRAND.name, total: aggregatedHistory.length, data: aggregatedHistory.slice(0, limit) });
+});
+
+app.get('/api/source/:name', (req, res) => {
+    const sourceName = req.params.name.toUpperCase();
+    const store = dataStore[sourceName];
+    if (!store) return res.status(404).json({ error: 'Không tìm thấy nguồn' });
+
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.json({ brand: BRAND.name, source: sourceName, data: store.history.slice(0, limit) });
 });
 
 // ==================== KHỞI CHẠY SERVER ====================
