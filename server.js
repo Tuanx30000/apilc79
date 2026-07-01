@@ -239,7 +239,15 @@ async function refreshAll() {
 
 // ==================== ROUTES ====================
 app.get('/', (req, res) => {
-    res.json({ brand: BRAND.name, version: BRAND.version, status: 'API Đang Chạy' });
+    res.json({ brand: BRAND.name, version: BRAND.version, status: 'API Đang Chạy 
+        các link 
+/ Kiểm tra server GET /
+/health Trạng thái chi tiết GET /health
+/api/latest Lấy bản ghi mới nhất tổng hợp GET /api/latest
+/api/history?limit=N Lấy N bản ghi gần nhất (mặc định 50, max 500) GET /api/history?limit=100
+/api/source/:name?limit=N Lấy lịch sử riêng nguồn (MD5 hoặc NOHU) GET /api/source/MD5?limit=20
+
+' });
 });
 
 app.get('/health', (req, res) => {
