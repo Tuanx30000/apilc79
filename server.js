@@ -1,209 +1,259 @@
-// server.js - V3.0.1 cho Render (không WebSocket)
+Dò soát code có đầy đủ // server.js - PHIÊN BẢN TỐI ƯU V2.2.0 
+// Bản quyền: tuanx3000 - Tổng hợp dữ liệu Tài Xỉu từ đa nguồn (MD5 & NOHU)
+
 const express = require('express');
 const cors = require('cors');
-const compression = require('compression');
-const rateLimit = require('express-rate-limit');
-const { Worker } = require('worker_threads');
-const fs = require('fs').promises;
-const path = require('path');
-const zlib = require('zlib');
-const { promisify } = require('util');
-const gunzip = promisify(zlib.gunzip);
-const gzip = promisify(zlib.gzip);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// ==================== CẤU HÌNH ====================
+// ==================== CẤU HÌNH CONSTANTS ====================
+const PORT = process.env.PORT || 3000;
 const HISTORY_LIMIT = 200;
 const FETCH_INTERVAL = 5000;
-const BACKUP_INTERVAL = 30000;
-const BACKUP_FILE = path.join(__dirname, 'backup.json.gz');
-const RATE_LIMIT_WINDOW = 60000;
-const RATE_LIMIT_MAX = 100;
+const FETCH_TIMEOUT = 10000;
+const MAX_RETRY = 3;
+const RETRY_DELAY = 1000;
 
-// ==================== BRAND ====================
-const BRAND = { name: 'tuanx3000', version: '3.0.1' };
+// ==================== BRAND INFO ====================
+const BRAND = {
+    name: 'tuanx3000',
+    version: '2.2.0',
+    author: 'tuanx3000',
+    contact: 'https://t.me/tuanx3000'
+};
 
-// ==================== MIDDLEWARE ====================
-app.use(cors({ origin: '*', credentials: true }));
-app.use(compression({ level: 6, threshold: 1024 }));
+// ==================== CORS CONFIGURATION ====================
+const corsOptions = {
+    origin: '*', // Cho phép mọi domain truy cập (bạn có thể giới hạn lại sau)
+    credentials: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400
+};
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-const limiter = rateLimit({
-    windowMs: RATE_LIMIT_WINDOW,
-    max: RATE_LIMIT_MAX,
-    handler: (req, res) => res.status(429).json({ error: 'Quá tải, thử lại sau 60s' })
-});
-app.use('/api/', limiter);
-
-// ==================== NGUỒN DỮ LIỆU ====================
+// ==================== DATA SOURCES MỚI ====================
 const SOURCES = {
-    MD5: { url: 'https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=85f666e4654999d6d2b7c4650c3f6da3' },
-    NOHU: { url: 'https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=85f666e4654999d6d2b7c4650c3f6da3' }
+    MD5: {
+        name: 'MD5',
+        url: 'https://wtxmd52.tele68.com/v1/txmd5/sessions?cp=R&cl=R&pf=web&at=85f666e4654999d6d2b7c4650c3f6da3'
+    },
+    NOHU: {
+        name: 'NOHU',
+        url: 'https://wtx.tele68.com/v1/tx/sessions?cp=R&cl=R&pf=web&at=85f666e4654999d6d2b7c4650c3f6da3'
+    }
 };
 
 // ==================== DATA STORE ====================
-const store = {
-    MD5: { history: [], latest: null, errorCount: 0, lastUpdate: null },
-    NOHU: { history: [], latest: null, errorCount: 0, lastUpdate: null }
+const dataStore = {
+    MD5: { history: [], latest: createEmptyRecord('MD5'), lastUpdate: null, errorCount: 0 },
+    NOHU: { history: [], latest: createEmptyRecord('NOHU'), lastUpdate: null, errorCount: 0 }
 };
+
 let aggregatedHistory = [];
-let aggregatedLatest = null;
-let lastAggregation = null;
+let aggregatedLatest = createEmptyRecord('Tổng hợp');
+let lastAggregationTime = null;
 
-// ==================== HELPER ====================
-function createEmpty() {
-    return { Phien: null, Xuc_xac_1: null, Xuc_xac_2: null, Xuc_xac_3: null, Tong: null, Ket_qua: '', nguon: '', brand: BRAND.name };
+function createEmptyRecord(source) {
+    return {
+        Phien: null,
+        Xuc_xac_1: null,
+        Xuc_xac_2: null,
+        Xuc_xac_3: null,
+        Tong: null,
+        Ket_qua: '',
+        nguon: source,
+        brand: BRAND.name,
+        server_time: new Date().toISOString(),
+        update_count: 0
+    };
 }
 
-// ==================== WORKER FETCH (tách luồng) ====================
-function fetchSourceWorker(url) {
-    return new Promise((resolve, reject) => {
-        const worker = new Worker(
-            `const { parentPort } = require('worker_threads');
-             const fetch = require('node-fetch');
-             (async () => {
-                 try {
-                     const res = await fetch('${url}', { timeout: 10000 });
-                     const data = await res.json();
-                     parentPort.postMessage({ ok: true, data });
-                 } catch (e) {
-                     parentPort.postMessage({ ok: false, error: e.message });
-                 }
-             })();`,
-            { eval: true }
-        );
-        worker.on('message', resolve);
-        worker.on('error', reject);
-        worker.on('exit', (code) => { if (code !== 0) reject(new Error(`Worker exit ${code}`)); });
-        setTimeout(() => { worker.terminate(); reject(new Error('Timeout')); }, 12000);
-    });
+// ==================== FETCH LOGIC VỚI TIMEOUT ====================
+async function fetchWithRetry(url, retries = MAX_RETRY) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        let timeoutHandle = null;
+        try {
+            const controller = new AbortController();
+            timeoutHandle = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+
+            const response = await fetch(url, { 
+                signal: controller.signal,
+                headers: { 
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                    'Accept': 'application/json'
+                }
+            });
+
+            clearTimeout(timeoutHandle);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            
+            const json = await response.json();
+            return json;
+        } catch (error) {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            if (attempt < retries) {
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+            } else {
+                return null;
+            }
+        }
+    }
+    return null;
 }
 
-// ==================== CHUYỂN ĐỔI DỮ LIỆU ====================
-function convertItems(raw, sourceName) {
-    if (!raw || !raw.list) return [];
-    const items = raw.list;
+// ==================== HÀM CONVERT DỮ LIỆU ĐƯỢC VIẾT LẠI CHO API MỚI ====================
+function convertToStandard(rawData, sourceName) {
+    if (!rawData) return [];
+
+    // Lấy mảng dữ liệu từ property "list" theo đúng cấu trúc API mới
+    let items = Array.isArray(rawData.list) ? rawData.list : [];
+    if (items.length === 0) return [];
+
+    const validItems = [];
+    const fetchTime = new Date().toISOString(); // API mới không có giờ, lấy giờ hệ thống
+
+    for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
+        try {
+            // Lấy ID Phiên
+            let sessionId = String(item.id || '').trim();
+            if (!sessionId) continue;
+
+            // Xử lý mảng xúc xắc (dices: [5,4,4])
+            let dice1 = 0, dice2 = 0, dice3 = 0;
+            if (Array.isArray(item.dices) && item.dices.length === 3) {
+                dice1 = parseInt(item.dices[0], 10);
+                dice2 = parseInt(item.dices[1], 10);
+                dice3 = parseInt(item.dices[2], 10);
+            }
+
+            // Lấy Tổng điểm và Kết quả
+            let diceSum = parseInt(item.point, 10) || (dice1 + dice2 + dice3);
+            let ketQua = String(item.resultTruyenThong || '').toUpperCase() === 'TAI' ? 'Tài' : 'Xỉu';
+
+            validItems.push({
+                Phien: sessionId,
+                Xuc_xac_1: dice1,
+                Xuc_xac_2: dice2,
+                Xuc_xac_3: dice3,
+                Tong: diceSum,
+                Ket_qua: ketQua,
+                nguon: sourceName,
+                server_time: fetchTime
+            });
+
+        } catch (error) {
+            console.warn(`[tuanx3000] ⚠️ Lỗi đọc item ${idx}: ${error.message}`);
+        }
+    }
+    return validItems;
+}
+
+// ==================== LỌC TRÙNG LẶP ====================
+function deduplicateByPhienAndSource(items) {
+    const seen = new Map();
     const result = [];
-    const now = new Date().toISOString();
     for (const item of items) {
-        if (!item.id) continue;
-        const dices = item.dices || [];
-        const d1 = parseInt(dices[0]) || 0;
-        const d2 = parseInt(dices[1]) || 0;
-        const d3 = parseInt(dices[2]) || 0;
-        const sum = parseInt(item.point) || (d1 + d2 + d3);
-        const resultText = (item.resultTruyenThong || '').toUpperCase() === 'TAI' ? 'Tài' : 'Xỉu';
-        result.push({
-            Phien: String(item.id),
-            Xuc_xac_1: d1,
-            Xuc_xac_2: d2,
-            Xuc_xac_3: d3,
-            Tong: sum,
-            Ket_qua: resultText,
-            nguon: sourceName,
-            server_time: now
-        });
+        const key = `${item.Phien}#${item.nguon}`;
+        if (!seen.has(key)) {
+            result.push(item);
+            seen.set(key, item);
+        }
     }
     return result;
 }
 
-// ==================== CẬP NHẬT NGUỒN ====================
-async function refreshSource(name) {
+// ==================== CẬP NHẬT TỪNG NGUỒN ====================
+async function refreshSource(sourceKey) {
+    const source = SOURCES[sourceKey];
+    const store = dataStore[sourceKey];
+
     try {
-        const result = await fetchSourceWorker(SOURCES[name].url);
-        if (!result.ok) throw new Error(result.error);
-        const raw = result.data;
-        let converted = convertItems(raw, name);
-        if (converted.length === 0) return;
-        // sort mới nhất
-        converted.sort((a, b) => parseInt(b.Phien) - parseInt(a.Phien));
-        // dedup
-        const seen = new Set();
-        const unique = converted.filter(item => {
-            const key = item.Phien;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
-        store[name].history = unique.slice(0, HISTORY_LIMIT);
-        store[name].lastUpdate = new Date().toISOString();
-        store[name].errorCount = 0;
-        if (store[name].history.length > 0) {
-            store[name].latest = { ...store[name].history[0], brand: BRAND.name };
+        const raw = await fetchWithRetry(source.url);
+        if (!raw) {
+            store.errorCount++;
+            return;
         }
-    } catch (err) {
-        store[name].errorCount++;
-        console.error(`[${name}] Lỗi: ${err.message}`);
+
+        let converted = convertToStandard(raw, sourceKey);
+        if (converted.length === 0) return;
+
+        // Sort: ID Phiên lớn nhất (mới nhất) lên đầu
+        converted.sort((a, b) => parseInt(b.Phien) - parseInt(a.Phien));
+        const unique = deduplicateByPhienAndSource(converted);
+
+        store.history = unique.slice(0, HISTORY_LIMIT);
+        store.lastUpdate = new Date().toISOString();
+        store.errorCount = 0;
+
+        if (store.history.length > 0) {
+            const latest = store.history[0];
+            store.latest = {
+                ...latest,
+                brand: BRAND.name,
+                update_count: (store.latest.update_count || 0) + 1
+            };
+            console.log(`[tuanx3000] ✅ ${sourceKey}: Đã cập nhật phiên #${latest.Phien}`);
+        }
+    } catch (error) {
+        store.errorCount++;
+        console.error(`[tuanx3000] ❌ Lỗi ${sourceKey}: ${error.message}`);
     }
 }
 
-// ==================== TỔNG HỢP ====================
-function aggregate() {
-    const all = [...store.MD5.history, ...store.NOHU.history];
+// ==================== TỔNG HỢP DỮ LIỆU ====================
+function updateAggregated() {
+    const all = [...dataStore.MD5.history, ...dataStore.NOHU.history];
     if (all.length === 0) return;
+
+    // Sắp xếp lại toàn bộ theo ID Phiên từ mới nhất đến cũ nhất
     all.sort((a, b) => parseInt(b.Phien) - parseInt(a.Phien));
-    const seen = new Set();
-    const unique = all.filter(item => {
-        const key = item.Phien + '#' + item.nguon;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-    aggregatedHistory = unique.slice(0, HISTORY_LIMIT);
-    lastAggregation = new Date().toISOString();
+    const unique = deduplicateByPhienAndSource(all);
+
+    aggregatedHistory = unique.slice(0, HISTORY_LIMIT * 2);
+    lastAggregationTime = new Date().toISOString();
+
     if (aggregatedHistory.length > 0) {
-        aggregatedLatest = { ...aggregatedHistory[0], brand: BRAND.name };
+        const latest = aggregatedHistory[0];
+        aggregatedLatest = {
+            ...latest,
+            brand: BRAND.name,
+            update_count: (aggregatedLatest.update_count || 0) + 1
+        };
     }
 }
 
-// ==================== BACKUP & RESTORE ====================
-async function backup() {
-    try {
-        const data = { store, aggregatedHistory, aggregatedLatest, lastAggregation };
-        const json = JSON.stringify(data);
-        const compressed = await gzip(json);
-        await fs.writeFile(BACKUP_FILE, compressed);
-    } catch (err) { console.error('Backup lỗi:', err.message); }
-}
-
-async function restore() {
-    try {
-        const compressed = await fs.readFile(BACKUP_FILE);
-        const json = await gunzip(compressed);
-        const data = JSON.parse(json.toString());
-        Object.assign(store, data.store);
-        aggregatedHistory = data.aggregatedHistory || [];
-        aggregatedLatest = data.aggregatedLatest || null;
-        lastAggregation = data.lastAggregation || null;
-        console.log('Phục hồi backup thành công');
-    } catch (err) { console.log('Không có backup hoặc lỗi đọc'); }
-}
-
-// ==================== REFRESH ALL ====================
+// ==================== ĐỒNG BỘ DATA ====================
 async function refreshAll() {
-    await Promise.all([refreshSource('MD5'), refreshSource('NOHU')]);
-    aggregate();
+    try {
+        await Promise.all([refreshSource('MD5'), refreshSource('NOHU')]);
+        updateAggregated();
+    } catch (error) {
+        console.error(`[tuanx3000] ❌ Lỗi refreshAll: ${error.message}`);
+    }
 }
 
 // ==================== ROUTES ====================
-app.get('/', (req, res) => res.json({ brand: BRAND.name, version: BRAND.version, status: 'API Running' }));
+app.get('/', (req, res) => {
+    res.json({ brand: BRAND.name, version: BRAND.version, status: 'API Đang Chạy' });
+});
 
 app.get('/health', (req, res) => {
     res.json({
         status: 'ok',
-        MD5: { records: store.MD5.history.length, latest: store.MD5.latest?.Phien || null, errors: store.MD5.errorCount },
-        NOHU: { records: store.NOHU.history.length, latest: store.NOHU.latest?.Phien || null, errors: store.NOHU.errorCount },
-        total: aggregatedHistory.length,
-        lastAggregation
+        MD5: { records: dataStore.MD5.history.length, latest: dataStore.MD5.latest.Phien },
+        NOHU: { records: dataStore.NOHU.history.length, latest: dataStore.NOHU.latest.Phien },
+        Tổng_hợp: aggregatedHistory.length
     });
 });
 
 app.get('/api/latest', (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
-    res.json(aggregatedLatest || createEmpty());
+    res.json(aggregatedLatest);
 });
 
 app.get('/api/history', (req, res) => {
@@ -213,27 +263,20 @@ app.get('/api/history', (req, res) => {
 });
 
 app.get('/api/source/:name', (req, res) => {
-    const name = req.params.name.toUpperCase();
-    if (!store[name]) return res.status(404).json({ error: 'Nguồn không tồn tại' });
+    const sourceName = req.params.name.toUpperCase();
+    const store = dataStore[sourceName];
+    if (!store) return res.status(404).json({ error: 'Không tìm thấy nguồn' });
+
     const limit = Math.min(parseInt(req.query.limit) || 50, 500);
     res.setHeader('Cache-Control', 'no-cache');
-    res.json({ brand: BRAND.name, source: name, data: store[name].history.slice(0, limit) });
+    res.json({ brand: BRAND.name, source: sourceName, data: store.history.slice(0, limit) });
 });
 
-// ==================== KHỞI ĐỘNG ====================
-(async function start() {
-    await restore();
+// ==================== KHỞI CHẠY SERVER ====================
+app.listen(PORT, '0.0.0.0', async () => {
+    console.log(`\n[tuanx3000] ✅ Server chạy tại cổng ${PORT}`);
+    console.log(`[tuanx3000] Xem data tại: http://localhost:${PORT}/api/history\n`);
+    
     await refreshAll();
-    // Lập lịch refresh
-    setInterval(refreshAll, FETCH_INTERVAL);
-    // Lập lịch backup
-    setInterval(backup, BACKUP_INTERVAL);
-    // Backup khi thoát
-    process.on('SIGINT', () => { backup(); process.exit(); });
-    process.on('SIGTERM', () => { backup(); process.exit(); });
-
-    app.listen(PORT, '0.0.0.0', () => {
-        console.log(`[${BRAND.name}] Server chạy cổng ${PORT}`);
-        console.log(`API: https://apilc79-2zq9.onrender.com/api/history`);
-    });
-})();
+    setInterval(refreshAll, FETCH_INTERVAL); // Chạy ngầm 5 giây/lần
+});
