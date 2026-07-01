@@ -239,7 +239,11 @@ async function refreshAll() {
 
 // ==================== ROUTES ====================
 app.get('/', (req, res) => {
-    res.json({ brand: BRAND.name, version: BRAND.version, status: '/ Kiểm tra server GET //health \nTrạng thái chi tiết GET /health/api/latest \nLấy bản ghi mới nhất tổng hợp GET /api/latest/api/history?limit=10 Lấy 10 bản ghi gần nhất \nGET /api/history?limit=100/api/source/name?limit=10 Lấy lịch sử riêng nguồn (MD5 hoặc NOHU) GET /api/source/MD5?limit=20' });
+    res.json({ brand: BRAND.name, version: BRAND.version, status: '/ Kiểm tra server GET //health 
+        Trạng thái chi tiết GET /health/api/latest 
+        Lấy bản ghi mới nhất tổng hợp GET /api/latest/api/history?limit=10 Lấy 10 bản ghi gần nhất 
+        GET /api/history?limit=100/api/source/name?limit=10 Lấy lịch sử riêng nguồn (MD5 hoặc NOHU) 
+        GET /api/source/MD5?limit=20' });
 });
 
 app.get('/health', (req, res) => {
